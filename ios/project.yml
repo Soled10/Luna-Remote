@@ -11,6 +11,7 @@ targets:
       - LunaRemote
     settings:
       PRODUCT_BUNDLE_IDENTIFIER: com.luna.remote
+      GENERATE_INFOPLIST_FILE: YES
       SWIFT_VERSION: 5.0
       TARGETED_DEVICE_FAMILY: '1,2'
       INFOPLIST_KEY_CFBundleDisplayName: Luna Remote

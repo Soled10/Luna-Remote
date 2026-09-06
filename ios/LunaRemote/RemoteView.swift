@@ -6,7 +6,7 @@ struct RemoteView: View {
     @State private var showKeyboard = false
     private var connected: Bool { session.connected }
     @State private var showPairing = false
-    @State private var host = ""
+    @State private var host = "192.168.100.7"
     @State private var token = ""
     @State private var lastGesture = "Toque na tela para controlar o Windows"
 

@@ -25,4 +25,34 @@ jobs:
             -sdk iphonesimulator \
             -configuration Debug \
             -derivedDataPath build/DerivedData \
-            CODE_SIGNING_ALLOWED=NO build
+          CODE_SIGNING_ALLOWED=NO build
+
+  unsigned-ipa:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate Xcode project
+        working-directory: ios
+        run: xcodegen generate
+      - name: Archive unsigned device build
+        run: |
+          xcodebuild archive \
+            -project ios/LunaRemote.xcodeproj \
+            -scheme LunaRemote \
+            -configuration Release \
+            -destination "generic/platform=iOS" \
+            -archivePath build/LunaRemote.xcarchive \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO
+      - name: Package unsigned IPA
+        run: |
+          mkdir -p build/unsigned/Payload
+          cp -R build/LunaRemote.xcarchive/Products/Applications/LunaRemote.app build/unsigned/Payload/
+          cd build/unsigned
+          zip -r ../LunaRemote-unsigned.ipa Payload
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LunaRemote-unsigned-ipa
+          path: build/LunaRemote-unsigned.ipa

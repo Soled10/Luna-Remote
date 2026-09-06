@@ -15,6 +15,7 @@ targets:
         UILaunchScreen: {}
         NSLocalNetworkUsageDescription: Conectar ao seu Windows e controlar a tela pela rede local.
         NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
           NSAllowsLocalNetworking: true
     settings:
       PRODUCT_BUNDLE_IDENTIFIER: com.luna.remote

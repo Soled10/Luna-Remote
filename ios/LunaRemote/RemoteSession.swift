@@ -19,7 +19,7 @@ final class RemoteSession: ObservableObject {
         host = host.replacingOccurrences(of: "https://", with: "")
             .replacingOccurrences(of: "http://", with: "")
             .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        let portPart = host.contains(":") ? "" : ":\(port)"
+        let portPart = scheme == "wss" || host.contains(":") ? "" : ":\(port)"
         guard var components = URLComponents(string: "\(scheme)://\(host)\(portPart)/remote/") else { return }
         components.queryItems = [URLQueryItem(name: "token", value: token)]
         guard let url = components.url else { return }

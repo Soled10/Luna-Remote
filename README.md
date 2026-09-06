@@ -1,4 +1,4 @@
-# Luna Remote 0.5.0
+# Luna Remote 0.5.1
 
 Cliente iOS SwiftUI + agente Windows 10/11. Protótipo de controle remoto; **não é equivalente ao Parsec e não promete zero latência**.
 
@@ -8,6 +8,7 @@ Cliente iOS SwiftUI + agente Windows 10/11. Protótipo de controle remoto; **nã
 - Controle conectado ao iPhone encaminhado como Xbox 360 virtual no Windows. Exige ViGEmBus já instalado; o aplicativo não instala drivers. Um controle, sem vibração e sem transmissão de áudio nesta versão. ViGEm é um projeto encerrado pelo fornecedor.
 - **Cursor real do Windows**: forma verdadeira (seta, I-beam, mão…) desenhada no quadro e posição enviada ao iPhone, que mostra uma seta nítida sobre o vídeo em qualquer resolução.
 - Captura da tela principal com GDI, **JPEG sobre WebSocket**, não H.264/HEVC. Teto de **120 fps** (telas ProMotion) com espera de precisão sub-milissegundo; `LUNA_MAX_FPS` ajusta o teto (30–144). Modos pedidos pelo iPhone: Performance (120 fps/960px), Equilibrado (90 fps/1280px), Qualidade (60 fps/1600px) e Automático adaptativo; rede lenta reduz para 960 pixels e 30 fps. FPS real depende do hardware, jogo e conexão.
+- **Anti-travamento**: a tela é capturada direto na resolução de envio em 1 chamada ao driver; quadros idênticos ao anterior **não são recodificados nem enviados** (tela parada ≈ zero banda, com reenvio de segurança a cada 1,5 s); o cursor é ecoado ao iPhone imediatamente após cada movimento/clique, então o ponteiro parece ao vivo mesmo com vídeo lento; o modo automático começa leve (960p) e só sobe após ~2 s de rede boa, descendo só sob congestão sustentada — sem oscilação. Com a tela parada, o contador de FPS do iPhone cai de propósito (não há nada novo para enviar); o cursor continua ao vivo.
 - **A sessão sobrevive ao minimizar o app**: sem acks, o agente pausa o vídeo e mantém a conexão; ao voltar, o iPhone reconecta sozinho. Quedas de rede também reconectam com backoff.
 - Protocolo 3 mantém no máximo dois quadros sem confirmação do cliente. O iPhone confirma cada quadro na chegada (mede só a rede) e decodifica em paralelo, descartando quadros velhos; arrastos do trackpad e rolagem são coalescidos antes do envio.
 - Decodificação assíncrona no iPhone; só a superfície de vídeo observa cada quadro. FPS, resolução e RTT são atualizados separadamente.

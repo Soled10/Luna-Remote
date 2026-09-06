@@ -82,7 +82,7 @@ struct RemoteView: View {
                 Text("REMOTE PLAY").font(.system(size: 9, weight: .semibold)).tracking(3).foregroundStyle(.secondary)
             }
             Spacer()
-            Text("0.5.0").font(.caption.monospaced()).foregroundStyle(.secondary)
+            Text("0.5.1").font(.caption.monospaced()).foregroundStyle(.secondary)
             tool(session.connected ? "power" : "plus", session.connected ? "Desconectar" : "Adicionar computador") {
                 if session.connected || session.connecting { controller.stop(); session.disconnect(); controller.start(session: session) }
                 else { sheet = .connection }

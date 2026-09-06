@@ -33,7 +33,7 @@ internal static class Program
         catch (HttpListenerException e) { Console.Error.WriteLine($"Não foi possível abrir porta {port}: {e.Message}"); return; }
         // Coordenadas de captura e do cursor em pixels reais, mesmo com escala de 125%/150% no Windows.
         try { SetProcessDPIAware(); } catch { }
-        Console.WriteLine($"Luna Remote Agent 0.5.0 | {ListenPrefix(port)} | até {MaxFps()} fps | Ctrl+C para encerrar");
+        Console.WriteLine($"Luna Remote Agent 0.5.1 | {ListenPrefix(port)} | até {MaxFps()} fps | Ctrl+C para encerrar");
         while (true)
         {
             var context = await listener.GetContextAsync();
@@ -88,7 +88,7 @@ internal static class Program
         using (var window = new FrameWindow())
         {
             var gate = new object();
-            long lastPad = Environment.TickCount64, lastMouse = lastPad;
+            long lastPad = Environment.TickCount64, lastMouse = lastPad, lastCursorEcho = 0;
             bool padActive = false, mouseHeld = false;
             string quality = "auto";
             int ceiling = MaxFps();
@@ -98,7 +98,7 @@ internal static class Program
             Task frames = Task.CompletedTask, watchdog = Task.CompletedTask;
             try
             {
-                await Send(new { type = "hello", version = "0.5.0", protocol = 3, gamepad = pad.Available, gamepadStatus = pad.Status, maxFps = ceiling, cursor = true });
+                await Send(new { type = "hello", version = "0.5.1", protocol = 3, gamepad = pad.Available, gamepadStatus = pad.Status, maxFps = ceiling, cursor = true });
                 Console.WriteLine("Cliente conectado. " + pad.Status);
                 frames = Task.Run(() => StreamScreen(socket, sendLock, stop, flowControl ? window : null, () => quality, ceiling));
                 watchdog = Task.Run(async () =>
@@ -147,6 +147,18 @@ internal static class Program
                                 WindowsInput.Apply(command);
                                 lastMouse = Environment.TickCount64;
                                 if (command.Type == "button") mouseHeld = command.Down;
+                                // Eco imediato do cursor: o ponteiro parece ao vivo mesmo
+                                // quando o vídeo está lento. Não espera o próximo quadro.
+                                if (command.Type is "move" or "click" or "button" && lastMouse - lastCursorEcho > 16)
+                                {
+                                    lastCursorEcho = lastMouse;
+                                    var area = Screen.PrimaryScreen?.Bounds ?? Rectangle.Empty;
+                                    if (area.Width > 0)
+                                    {
+                                        GetCursorState(area, out double ex, out double ey, out bool evis);
+                                        EchoCursor(socket, sendLock, stop, ex, ey, evis);
+                                    }
+                                }
                             }
                         }
                         if (command.Type == "text") await Send(new { type = "ack", id = command.Id });
@@ -183,15 +195,19 @@ internal static class Program
     {
         var codec = ImageCodecInfo.GetImageEncoders().First(c => c.FormatID == ImageFormat.Jpeg.Guid);
         using var encParams = new EncoderParameters(1);
-        Bitmap? raw = null;
+        Bitmap? frame = null;   // bitmap final, já na resolução de envio (reutilizado)
         Graphics? gfx = null;
-        Bitmap? scaled = null;
-        Size scaledSize = Size.Empty;
+        Bitmap? raw = null;     // só alocado se o StretchBlt falhar (fallback GDI)
+        Graphics? rawGfx = null;
+        Size frameSize = Size.Empty;
         Rectangle lastBounds = Rectangle.Empty;
+        var profile = new AutoProfile();
+        ulong prevHash = 0;
+        bool havePrev = false;
         double lastCurX = -1, lastCurY = -1;
         bool lastCurVis = false;
-        long lastCursorSend = 0;
-        bool pausedLogged = false;
+        long lastFrameSent = 0, lastCursorMeta = 0;
+        bool pausedLogged = false, captureLogged = false, useFallback = false;
         try
         {
             while (!stop.IsCancellationRequested)
@@ -209,52 +225,75 @@ internal static class Program
                 if (pausedLogged) { Console.WriteLine("Vídeo retomado."); pausedLogged = false; }
                 long started = System.Diagnostics.Stopwatch.GetTimestamp();
                 var bounds = Screen.PrimaryScreen?.Bounds ?? throw new InvalidOperationException("Sem monitor.");
-                if (raw == null || bounds != lastBounds)
-                {
-                    gfx?.Dispose(); raw?.Dispose(); scaled?.Dispose(); scaled = null; scaledSize = Size.Empty;
-                    raw = new Bitmap(bounds.Width, bounds.Height, PixelFormat.Format24bppRgb);
-                    gfx = Graphics.FromImage(raw);
-                    lastBounds = bounds;
-                }
-                gfx!.CopyFromScreen(bounds.Location, Point.Empty, bounds.Size);
-                // Cursor REAL (seta, I-beam, mão…) com hotspot correto + posição p/ overlay do iOS.
-                DrawRealCursor(gfx, bounds, out double curX, out double curY, out bool curVis);
 
                 string mode = getQuality();
-                // A slow acknowledgement includes network time; reduce load, not queue depth.
-                bool constrained = window?.LatencyMs > 140;
-                var (targetFps, width, q) = Preset(mode, ceiling, constrained);
+                bool auto = mode == "auto";
+                double latency = window?.LatencyMs ?? 50;
+                if (auto) profile.Observe(latency);
+                var (targetFps, width, q) = auto ? profile.Current(ceiling) : Preset(mode, ceiling, latency > 140);
                 double scale = Math.Min(1, width / (double)bounds.Width);
                 int outW = Math.Max(320, (int)(bounds.Width * scale));
                 int outH = Math.Max(180, (int)(bounds.Height * scale));
-                Bitmap frame = raw;
-                if (scale < 0.995)
+                if (frame == null || frameSize != new Size(outW, outH) || bounds != lastBounds)
                 {
-                    if (scaled == null || scaledSize != new Size(outW, outH))
-                    {
-                        scaled?.Dispose();
-                        scaled = new Bitmap(outW, outH, PixelFormat.Format24bppRgb);
-                        scaledSize = new Size(outW, outH);
-                    }
-                    using (var sg = Graphics.FromImage(scaled))
-                    {
-                        sg.CompositingMode = System.Drawing.Drawing2D.CompositingMode.SourceCopy;
-                        sg.CompositingQuality = System.Drawing.Drawing2D.CompositingQuality.HighSpeed;
-                        sg.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.Bilinear;
-                        sg.DrawImage(raw, 0, 0, outW, outH);
-                    }
-                    frame = scaled;
+                    gfx?.Dispose(); frame?.Dispose(); frame = null;
+                    frame = new Bitmap(outW, outH, PixelFormat.Format32bppArgb);
+                    gfx = Graphics.FromImage(frame);
+                    gfx.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.Bilinear;
+                    frameSize = new Size(outW, outH); lastBounds = bounds;
+                    havePrev = false; // resize/monitor novo: reenvia cheio
                 }
+
+                // Captura direto na resolução final (1 chamada). Fallback GDI se falhar.
+                if (!useFallback && !CaptureStretch(frame, gfx!, bounds))
+                {
+                    useFallback = true;
+                    if (!captureLogged) { Console.WriteLine("StretchBlt indisponível; usando captura GDI."); captureLogged = true; }
+                }
+                if (useFallback)
+                {
+                    if (raw == null || raw.Size != bounds.Size)
+                    {
+                        rawGfx?.Dispose(); raw?.Dispose();
+                        raw = new Bitmap(bounds.Width, bounds.Height, PixelFormat.Format24bppRgb);
+                        rawGfx = Graphics.FromImage(raw);
+                    }
+                    rawGfx!.CopyFromScreen(bounds.Location, Point.Empty, bounds.Size);
+                    gfx!.DrawImage(raw, 0, 0, outW, outH);
+                }
+
+                // Tela parada? Não codifica nem envia JPEG: libera o slot e dorme.
+                // O cursor continua ao vivo por mensagem própria (aqui e no eco de input).
+                ulong hash = ThumbHash(frame);
+                GetCursorState(bounds, out double curX, out double curY, out bool curVis);
+                long now = System.Diagnostics.Stopwatch.GetTimestamp();
+                bool cursorChanged = CursorMoved(lastCurX, lastCurY, lastCurVis, curX, curY, curVis);
+                bool stale = System.Diagnostics.Stopwatch.GetElapsedTime(lastFrameSent).TotalMilliseconds > 1500;
+                if (havePrev && hash == prevHash && !cursorChanged && !stale)
+                {
+                    window?.Acknowledge(id); // quadro idêntico não ocupa a rede
+                    if (System.Diagnostics.Stopwatch.GetElapsedTime(lastCursorMeta).TotalMilliseconds > 200)
+                    {
+                        lastCursorMeta = now;
+                        try { await SendBytes(socket, mutex, JsonSerializer.SerializeToUtf8Bytes(new { type = "cursor", x = Math.Round(curX, 4), y = Math.Round(curY, 4), visible = curVis }), WebSocketMessageType.Text, stop.Token); }
+                        catch { break; }
+                    }
+                    try { await Task.Delay(33, stop.Token); } catch { break; }
+                    continue;
+                }
+
+                DrawRealCursor(gfx!, outW, outH, scale, curX, curY, curVis);
                 encParams.Param[0]?.Dispose();
                 encParams.Param[0] = new EncoderParameter(System.Drawing.Imaging.Encoder.Quality, q);
                 byte[] jpeg;
                 using (var ms = new MemoryStream(131072)) { frame.Save(ms, codec, encParams); jpeg = ms.ToArray(); }
                 await SendBytes(socket, mutex, window == null ? jpeg : FrameWindow.Packet(id, jpeg), WebSocketMessageType.Binary, stop.Token);
-                long now = System.Diagnostics.Stopwatch.GetTimestamp();
-                if (CursorMoved(lastCurX, lastCurY, lastCurVis, curX, curY, curVis)
-                    || System.Diagnostics.Stopwatch.GetElapsedTime(lastCursorSend).TotalMilliseconds > 200)
+                havePrev = true; prevHash = hash;
+                lastFrameSent = System.Diagnostics.Stopwatch.GetTimestamp();
+                now = lastFrameSent;
+                if (cursorChanged || System.Diagnostics.Stopwatch.GetElapsedTime(lastCursorMeta).TotalMilliseconds > 200)
                 {
-                    lastCurX = curX; lastCurY = curY; lastCurVis = curVis; lastCursorSend = now;
+                    lastCurX = curX; lastCurY = curY; lastCurVis = curVis; lastCursorMeta = now;
                     try { await SendBytes(socket, mutex, JsonSerializer.SerializeToUtf8Bytes(new { type = "cursor", x = Math.Round(curX, 4), y = Math.Round(curY, 4), visible = curVis }), WebSocketMessageType.Text, stop.Token); }
                     catch (OperationCanceledException) { break; }
                     catch { break; }
@@ -275,7 +314,7 @@ internal static class Program
             }
         }
         catch (Exception) { stop.Cancel(); }
-        finally { gfx?.Dispose(); raw?.Dispose(); scaled?.Dispose(); }
+        finally { gfx?.Dispose(); frame?.Dispose(); rawGfx?.Dispose(); raw?.Dispose(); }
     }
 
     private static (int fps, double width, long quality) Preset(string mode, int ceiling, bool constrained)
@@ -290,22 +329,68 @@ internal static class Program
         };
     }
 
+    // Modo automático com slow-start e histerese: começa leve (960p) para a
+    // primeira imagem chegar rápido, sobe após ~2 s de rede boa e só desce
+    // após congestão sustentada — sem o liga/desliga que causava engasgos.
+    internal sealed class AutoProfile
+    {
+        public int Tier { get; private set; } = 0;
+        private int goodStreak, badStreak;
+        public void Observe(double latencyMs)
+        {
+            if (Tier == 0)
+            {
+                if (latencyMs < 70) { if (++goodStreak >= 240) { Tier = 1; goodStreak = badStreak = 0; } }
+                else goodStreak = 0;
+            }
+            else
+            {
+                if (latencyMs > 140) { if (++badStreak >= 10) { Tier = 0; goodStreak = badStreak = 0; } }
+                else badStreak = 0;
+            }
+        }
+        public (int fps, double width, long quality) Current(int ceiling) =>
+            Tier == 0 ? (Math.Min(ceiling, 60), 960, 50) : (ceiling, 1280, 60);
+    }
+
     private static bool CursorMoved(double lx, double ly, bool lv, double x, double y, bool v) =>
         lv != v || Math.Abs(lx - x) > 0.002 || Math.Abs(ly - y) > 0.002;
 
-    // Desenha o cursor de verdade (não uma seta genérica) e devolve a posição
-    // normalizada para o overlay nítido do iPhone.
-    private static void DrawRealCursor(Graphics g, Rectangle bounds, out double nx, out double ny, out bool visible)
+    // Posição do cursor sem copiar o ícone (barato: chamado a cada input).
+    private static void GetCursorState(Rectangle bounds, out double nx, out double ny, out bool visible)
     {
         nx = 0.5; ny = 0.5; visible = false;
         try
         {
             var ci = new CursorInfo { Size = Marshal.SizeOf<CursorInfo>() };
+            if (!GetCursorInfo(ref ci) || ci.Handle == IntPtr.Zero) return;
+            nx = (double)(ci.Pos.X - bounds.X) / Math.Max(1, bounds.Width);
+            ny = (double)(ci.Pos.Y - bounds.Y) / Math.Max(1, bounds.Height);
+            visible = ci.Flags == 1;
+        }
+        catch { }
+    }
+
+    // Envio de cursor sem esperar: observa a falha para não deixar exceção solta.
+    private static void EchoCursor(WebSocket socket, SemaphoreSlim mutex, CancellationTokenSource stop, double x, double y, bool visible)
+    {
+        try
+        {
+            var bytes = JsonSerializer.SerializeToUtf8Bytes(new { type = "cursor", x = Math.Round(x, 4), y = Math.Round(y, 4), visible });
+            _ = SendBytes(socket, mutex, bytes, WebSocketMessageType.Text, stop.Token)
+                .ContinueWith(t => { if (t.IsFaulted) { try { stop.Cancel(); } catch { } } }, TaskScheduler.Default);
+        }
+        catch { }
+    }
+
+    // Desenha o cursor de verdade (não uma seta genérica) já na resolução de envio.
+    private static void DrawRealCursor(Graphics g, int outW, int outH, double scale, double nx, double ny, bool visible)
+    {
+        if (!visible) return;
+        try
+        {
+            var ci = new CursorInfo { Size = Marshal.SizeOf<CursorInfo>() };
             if (!GetCursorInfo(ref ci) || ci.Flags != 1 || ci.Handle == IntPtr.Zero) return;
-            int sx = ci.Pos.X - bounds.X, sy = ci.Pos.Y - bounds.Y;
-            nx = (double)sx / Math.Max(1, bounds.Width);
-            ny = (double)sy / Math.Max(1, bounds.Height);
-            visible = true;
             IntPtr copy = CopyIcon(ci.Handle);
             if (copy == IntPtr.Zero) return;
             try
@@ -321,13 +406,64 @@ internal static class Program
                     }
                 }
                 catch { }
+                int icon = Math.Max(16, (int)(32 * scale));
+                int dx = (int)(nx * outW - hx * scale), dy = (int)(ny * outH - hy * scale);
                 IntPtr hdc = g.GetHdc();
-                try { DrawIconEx(hdc, sx - hx, sy - hy, copy, 0, 0, 0, IntPtr.Zero, 0x0003); }
+                try { DrawIconEx(hdc, dx, dy, copy, icon, icon, 0, IntPtr.Zero, 0x0003); }
                 finally { g.ReleaseHdc(hdc); }
             }
             finally { DestroyIcon(copy); }
         }
         catch { }
+    }
+
+    // Captura a tela direto na resolução de envio em 1 chamada ao driver,
+    // sem bitmap full-res temporário nem resize na CPU.
+    private static bool CaptureStretch(Bitmap frame, Graphics gfx, Rectangle bounds)
+    {
+        IntPtr screenDC = IntPtr.Zero, hdc = IntPtr.Zero;
+        bool gotHdc = false;
+        try
+        {
+            screenDC = GetDC(IntPtr.Zero);
+            if (screenDC == IntPtr.Zero) return false;
+            hdc = gfx.GetHdc(); gotHdc = true;
+            SetStretchBltMode(hdc, 4 /*HALFTONE*/);
+            SetBrushOrgEx(hdc, 0, 0, IntPtr.Zero);
+            return StretchBlt(hdc, 0, 0, frame.Width, frame.Height,
+                screenDC, bounds.X, bounds.Y, bounds.Width, bounds.Height, 0x00CC0020 /*SRCCOPY*/);
+        }
+        catch { return false; }
+        finally
+        {
+            if (gotHdc) { try { gfx.ReleaseHdc(hdc); } catch { } }
+            if (screenDC != IntPtr.Zero) ReleaseDC(IntPtr.Zero, screenDC);
+        }
+    }
+
+    // Hash rápido de miniatura amostrada: detecta qualquer mudança com <0,5 ms.
+    internal static ulong ThumbHash(Bitmap bmp)
+    {
+        var data = bmp.LockBits(new Rectangle(0, 0, bmp.Width, bmp.Height), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+        try
+        {
+            int stepX = Math.Max(1, bmp.Width / 64);
+            int stepY = Math.Max(1, bmp.Height / 36);
+            ulong h = 1469598103934665603UL;
+            for (int y = 0; y < bmp.Height; y += stepY)
+            {
+                int row = y * data.Stride;
+                for (int x = 0; x < bmp.Width; x += stepX)
+                {
+                    // Pixel inteiro (BGRA): trocar R por B também muda o hash.
+                    uint p = unchecked((uint)Marshal.ReadInt32(data.Scan0, row + x * 4));
+                    h ^= p + (uint)x * 31 + (uint)y * 101;
+                    h *= 1099511628211UL;
+                }
+            }
+            return h;
+        }
+        finally { bmp.UnlockBits(data); }
     }
 
     [DllImport("user32.dll")] private static extern bool SetProcessDPIAware();
@@ -337,6 +473,11 @@ internal static class Program
     [DllImport("user32.dll")] private static extern bool GetIconInfo(IntPtr hIcon, out IconInfo info);
     [DllImport("user32.dll")] private static extern bool DrawIconEx(IntPtr hdc, int x, int y, IntPtr hIcon, int cx, int cy, int step, IntPtr flicker, int flags);
     [DllImport("gdi32.dll")] private static extern bool DeleteObject(IntPtr hObject);
+    [DllImport("user32.dll")] private static extern IntPtr GetDC(IntPtr hWnd);
+    [DllImport("user32.dll")] private static extern int ReleaseDC(IntPtr hWnd, IntPtr hDC);
+    [DllImport("gdi32.dll")] private static extern bool StretchBlt(IntPtr hdcDest, int xDest, int yDest, int wDest, int hDest, IntPtr hdcSrc, int xSrc, int ySrc, int wSrc, int hSrc, int rop);
+    [DllImport("gdi32.dll")] private static extern int SetStretchBltMode(IntPtr hdc, int mode);
+    [DllImport("gdi32.dll")] private static extern bool SetBrushOrgEx(IntPtr hdc, int x, int y, IntPtr prev);
 
     [StructLayout(LayoutKind.Sequential)] private struct Point32 { public int X, Y; }
     [StructLayout(LayoutKind.Sequential)] private struct CursorInfo { public int Size; public int Flags; public IntPtr Handle; public Point32 Pos; }

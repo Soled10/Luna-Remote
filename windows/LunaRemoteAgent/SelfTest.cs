@@ -1,3 +1,5 @@
+using System.Drawing;
+using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
 
 internal static class SelfTest
@@ -66,5 +68,19 @@ internal static class SelfTest
         cancelPause.Cancel();
         try { paused.TryReserve(TimeSpan.FromSeconds(5), cancelPause.Token); throw new Exception("Pause ignores cancellation"); }
         catch (OperationCanceledException) { Console.WriteLine("PASS paused video honours cancellation"); }
+        var profile = new Program.AutoProfile();
+        Check(profile.Tier == 0 && profile.Current(120) == (60, 960, 50), "Auto slow-starts light");
+        for (int i = 0; i < 240; i++) profile.Observe(20);
+        Check(profile.Tier == 1 && profile.Current(120) == (120, 1280, 60), "Sustained good network upgrades");
+        for (int i = 0; i < 9; i++) profile.Observe(500);
+        Check(profile.Tier == 1, "Single spikes do not downgrade");
+        profile.Observe(500);
+        Check(profile.Tier == 0 && profile.Current(120) == (60, 960, 50), "Sustained congestion downgrades");
+        using var tiny = new Bitmap(16, 16, PixelFormat.Format32bppArgb);
+        using (var tg = Graphics.FromImage(tiny)) tg.Clear(Color.Red);
+        ulong hash1 = Program.ThumbHash(tiny), hash2 = Program.ThumbHash(tiny);
+        Check(hash1 == hash2, "Identical frames hash equal");
+        tiny.SetPixel(3, 4, Color.Blue);
+        Check(Program.ThumbHash(tiny) != hash1, "Changed pixel detected");
     }
 }

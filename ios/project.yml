@@ -1,0 +1,19 @@
+name: LunaRemote
+options:
+  bundleIdPrefix: com.luna
+  deploymentTarget:
+    iOS: '17.0'
+targets:
+  LunaRemote:
+    type: application
+    platform: iOS
+    sources:
+      - LunaRemote
+    settings:
+      PRODUCT_BUNDLE_IDENTIFIER: com.luna.remote
+      SWIFT_VERSION: 5.0
+      TARGETED_DEVICE_FAMILY: '1,2'
+      INFOPLIST_KEY_CFBundleDisplayName: Luna Remote
+      INFOPLIST_KEY_UIRequiresFullScreen: true
+      INFOPLIST_KEY_NSCameraUsageDescription: Luna Remote não usa a câmera.
+      INFOPLIST_KEY_NSLocalNetworkUsageDescription: Luna Remote precisa encontrar seu computador Windows na rede local.

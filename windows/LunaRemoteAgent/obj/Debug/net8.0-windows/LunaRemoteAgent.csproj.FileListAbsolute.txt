@@ -1,0 +1,14 @@
+C:\Users\Lucas\Documents\Codex\2026-09-06\ent-o-gpt-luna-eu-quero\work\windows\LunaRemoteAgent\obj\Debug\net8.0-windows\LunaRemoteAgent.GeneratedMSBuildEditorConfig.editorconfig
+C:\Users\Lucas\Documents\Codex\2026-09-06\ent-o-gpt-luna-eu-quero\work\windows\LunaRemoteAgent\obj\Debug\net8.0-windows\LunaRemoteAgent.AssemblyInfoInputs.cache
+C:\Users\Lucas\Documents\Codex\2026-09-06\ent-o-gpt-luna-eu-quero\work\windows\LunaRemoteAgent\obj\Debug\net8.0-windows\LunaRemoteAgent.AssemblyInfo.cs
+C:\Users\Lucas\Documents\Codex\2026-09-06\ent-o-gpt-luna-eu-quero\work\windows\LunaRemoteAgent\obj\Debug\net8.0-windows\LunaRemoteAgent.csproj.CoreCompileInputs.cache
+C:\Users\Lucas\Documents\Codex\2026-09-06\ent-o-gpt-luna-eu-quero\work\windows\LunaRemoteAgent\bin\Debug\net8.0-windows\LunaRemoteAgent.exe
+C:\Users\Lucas\Documents\Codex\2026-09-06\ent-o-gpt-luna-eu-quero\work\windows\LunaRemoteAgent\bin\Debug\net8.0-windows\LunaRemoteAgent.deps.json
+C:\Users\Lucas\Documents\Codex\2026-09-06\ent-o-gpt-luna-eu-quero\work\windows\LunaRemoteAgent\bin\Debug\net8.0-windows\LunaRemoteAgent.runtimeconfig.json
+C:\Users\Lucas\Documents\Codex\2026-09-06\ent-o-gpt-luna-eu-quero\work\windows\LunaRemoteAgent\bin\Debug\net8.0-windows\LunaRemoteAgent.dll
+C:\Users\Lucas\Documents\Codex\2026-09-06\ent-o-gpt-luna-eu-quero\work\windows\LunaRemoteAgent\bin\Debug\net8.0-windows\LunaRemoteAgent.pdb
+C:\Users\Lucas\Documents\Codex\2026-09-06\ent-o-gpt-luna-eu-quero\work\windows\LunaRemoteAgent\obj\Debug\net8.0-windows\LunaRemoteAgent.dll
+C:\Users\Lucas\Documents\Codex\2026-09-06\ent-o-gpt-luna-eu-quero\work\windows\LunaRemoteAgent\obj\Debug\net8.0-windows\refint\LunaRemoteAgent.dll
+C:\Users\Lucas\Documents\Codex\2026-09-06\ent-o-gpt-luna-eu-quero\work\windows\LunaRemoteAgent\obj\Debug\net8.0-windows\LunaRemoteAgent.pdb
+C:\Users\Lucas\Documents\Codex\2026-09-06\ent-o-gpt-luna-eu-quero\work\windows\LunaRemoteAgent\obj\Debug\net8.0-windows\LunaRemoteAgent.genruntimeconfig.cache
+C:\Users\Lucas\Documents\Codex\2026-09-06\ent-o-gpt-luna-eu-quero\work\windows\LunaRemoteAgent\obj\Debug\net8.0-windows\ref\LunaRemoteAgent.dll

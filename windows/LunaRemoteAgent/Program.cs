@@ -37,16 +37,22 @@ internal static class Program
     {
         var p = message.Split(':');
         if (p.Length >= 3 && p[0] == "mouse" && p[1] == "move" && int.TryParse(p[2], out var dx) && int.TryParse(p.ElementAtOrDefault(3), out var dy)) SendMouse(dx, dy, 1);
-        else if (message == "mouse:left") SendMouse(0, 0, 2); else if (message == "mouse:right") SendMouse(0, 0, 8);
-        else if (message == "mouse:double") { SendMouse(0, 0, 2); SendMouse(0, 0, 4); SendMouse(0, 0, 2); SendMouse(0, 0, 8); }
+        else if (message == "mouse:left") { SendMouse(0, 0, 2); SendMouse(0, 0, 4); }
+        else if (message == "mouse:right") { SendMouse(0, 0, 8); SendMouse(0, 0, 16); }
+        else if (message == "mouse:double") { SendMouse(0, 0, 2); SendMouse(0, 0, 4); SendMouse(0, 0, 2); SendMouse(0, 0, 4); }
         else if (message.StartsWith("key:text:")) { try { SendUnicodeText(System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(message[9..]))); } catch { } }
     }
     [DllImport("user32.dll")] private static extern uint SendInput(uint n, INPUT[] a, int s);
-    [DllImport("user32.dll")] private static extern uint SendInputKey(uint n, INPUT_KEY[] a, int s);
+    [DllImport("user32.dll", EntryPoint = "SendInput")] private static extern uint SendInputKey(uint n, INPUT_KEY[] a, int s);
     [StructLayout(LayoutKind.Sequential)] private struct INPUT { public uint type; public MOUSEINPUT mi; }
     [StructLayout(LayoutKind.Sequential)] private struct MOUSEINPUT { public int dx, dy; public uint mouseData, dwFlags, time; public nint dwExtraInfo; }
     [StructLayout(LayoutKind.Sequential)] private struct KEYBDINPUT { public ushort wVk, wScan; public uint dwFlags, time; public nint dwExtraInfo; }
-    [StructLayout(LayoutKind.Sequential)] private struct INPUT_KEY { public uint type; public KEYBDINPUT ki; }
+    [StructLayout(LayoutKind.Explicit)] private struct INPUTUNION { [FieldOffset(0)] public KEYBDINPUT ki; [FieldOffset(0)] public MOUSEINPUT mi; }
+    [StructLayout(LayoutKind.Sequential)] private struct INPUT_KEY {
+        public uint type;
+        public INPUTUNION data;
+        public KEYBDINPUT ki { get => data.ki; set => data.ki = value; }
+    }
     private static void SendMouse(int x, int y, uint flags) => SendInput(1, new[] { new INPUT { type = 0, mi = new MOUSEINPUT { dx = x, dy = y, dwFlags = flags } } }, Marshal.SizeOf<INPUT>());
     private static void SendUnicodeText(string text) { var a = new List<INPUT_KEY>(); foreach (var c in text) { a.Add(new INPUT_KEY { type = 1, ki = new KEYBDINPUT { wScan = c, dwFlags = 4 } }); a.Add(new INPUT_KEY { type = 1, ki = new KEYBDINPUT { wScan = c, dwFlags = 6 } }); } if (a.Count > 0) SendInputKey((uint)a.Count, a.ToArray(), Marshal.SizeOf<INPUT_KEY>()); }
 }

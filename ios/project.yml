@@ -9,10 +9,19 @@ targets:
     platform: iOS
     sources:
       - LunaRemote
+    info:
+      path: Generated/Info.plist
+      properties:
+        UILaunchScreen: {}
+        NSLocalNetworkUsageDescription: Conectar ao seu Windows e controlar a tela pela rede local.
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
     settings:
       PRODUCT_BUNDLE_IDENTIFIER: com.luna.remote
       GENERATE_INFOPLIST_FILE: YES
       SWIFT_VERSION: 5.0
+      MARKETING_VERSION: 0.2.0
+      CURRENT_PROJECT_VERSION: 2
       TARGETED_DEVICE_FAMILY: '1,2'
       INFOPLIST_KEY_CFBundleDisplayName: Luna Remote
       INFOPLIST_KEY_UIRequiresFullScreen: true

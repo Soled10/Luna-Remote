@@ -5,9 +5,16 @@ import Combine
 final class RemoteSession: ObservableObject {
     @Published var frame: UIImage?
     @Published var status = "Desconectado"
+    @Published var connected = false
     private var socket: URLSessionWebSocketTask?
 
     func connect(host: String, token: String, port: Int = 8765) {
+        disconnect()
+        let host = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !host.hasPrefix("127."), host != "localhost", host != "::1" else {
+            status = "Use o IP do Windows. 127.0.0.1 aponta para o próprio iPhone."
+            return
+        }
         guard var components = URLComponents(string: "ws://\(host):\(port)/remote/") else { return }
         components.queryItems = [URLQueryItem(name: "token", value: token)]
         guard let url = components.url else { return }
@@ -15,12 +22,31 @@ final class RemoteSession: ObservableObject {
         socket?.resume(); status = "Conectando…"; receive()
     }
     func send(_ message: String) { socket?.send(.string(message)) { _ in } }
+    func disconnect() {
+        socket?.cancel(with: .goingAway, reason: nil)
+        socket = nil
+        connected = false
+        frame = nil
+        status = "Desconectado"
+    }
     private func receive() {
-        socket?.receive { [weak self] result in
+        guard let current = socket else { return }
+        current.receive { [weak self] result in
             Task { @MainActor in
                 guard let self else { return }
-                if case .success(.data(let data)) = result { self.frame = UIImage(data: data); self.status = "Conectado" }
-                if self.socket?.state == .running { self.receive() }
+                guard self.socket === current else { return }
+                switch result {
+                case .success(.data(let data)):
+                    self.frame = UIImage(data: data)
+                    self.connected = self.frame != nil
+                    self.status = "Conectado ao Windows"
+                case .failure(let error):
+                    self.disconnect()
+                    self.status = "Falha: \(error.localizedDescription) Verifique IP, token, agente e Wi-Fi."
+                    return
+                default: break
+                }
+                self.receive()
             }
         }
     }

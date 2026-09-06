@@ -4,7 +4,7 @@ import UIKit
 struct RemoteView: View {
     @StateObject private var session = RemoteSession()
     @State private var showKeyboard = false
-    @State private var connected = false
+    private var connected: Bool { session.connected }
     @State private var showPairing = false
     @State private var host = ""
     @State private var token = ""
@@ -20,7 +20,7 @@ struct RemoteView: View {
                         Circle().fill(connected ? .green : .orange).frame(width: 9, height: 9)
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Luna Remote").font(.headline).foregroundStyle(.white)
-                            Text(connected ? "Conectado ao Windows" : "Nenhum PC conectado")
+                            Text(session.status)
                                 .font(.caption).foregroundStyle(.white.opacity(0.65))
                         }
                         Spacer()
@@ -106,7 +106,7 @@ struct RemoteView: View {
                     TextField("IP do Windows (ex.: 192.168.0.10)", text: $host).textFieldStyle(.roundedBorder).keyboardType(.URL)
                     SecureField("Token do agente", text: $token).textFieldStyle(.roundedBorder)
                     Button("Conectar") {
-                        session.connect(host: host, token: token); connected = true; showPairing = false
+                        session.connect(host: host, token: token); showPairing = false
                     }.buttonStyle(.borderedProminent).disabled(host.isEmpty || token.isEmpty)
                 }.padding()
                     .presentationDetents([.height(250)])
@@ -118,24 +118,31 @@ struct RemoteView: View {
 private struct RemoteCanvas: View {
     let frame: UIImage?
     let onGesture: (String) -> Void
-    @State private var dragStart: CGPoint?
+    @State private var previous = CGSize.zero
 
     var body: some View {
         Group { if let frame { Image(uiImage: frame).resizable().scaledToFit() } else { Color.clear } }
             .contentShape(Rectangle())
             .gesture(
-                DragGesture(minimumDistance: 0)
+                DragGesture(minimumDistance: 8)
                     .onChanged { value in
-                        if dragStart == nil { dragStart = value.startLocation }
-                        onGesture("Mouse:\(Int(value.translation.width)):\(Int(value.translation.height))")
+                        let dx = value.translation.width - previous.width
+                        let dy = value.translation.height - previous.height
+                        previous = value.translation
+                        onGesture("Mouse:\(Int(dx)):\(Int(dy))")
                     }
                     .onEnded { _ in
-                        dragStart = nil
-                        onGesture("Clique")
+                        previous = .zero
                     }
             )
             .simultaneousGesture(
-                TapGesture(count: 2).onEnded { onGesture("Duplo clique") }
+                TapGesture(count: 2).exclusively(before: TapGesture(count: 1))
+                    .onEnded { result in
+                        switch result {
+                        case .first: onGesture("Duplo clique")
+                        case .second: onGesture("Clique")
+                        }
+                    }
             )
             .simultaneousGesture(
                 LongPressGesture(minimumDuration: 0.55).onEnded { _ in onGesture("Botão direito") }
@@ -150,8 +157,10 @@ private struct RemoteKeyboardInput: View {
         TextField("Digite no Windows", text: $text)
             .textFieldStyle(.roundedBorder)
             .padding()
-            .onChange(of: text) { _, newValue in
-                onText(newValue)
+            .onSubmit {
+                onText(text)
+                text = ""
             }
+            .submitLabel(.send)
     }
 }

@@ -6,6 +6,7 @@ struct RemoteView: View {
     @State private var sheet: Panel?
     @State private var fullscreen = false
     @State private var hudVisible = true
+    @AppStorage("lunaQuality") private var quality = "auto"
     @Environment(\.scenePhase) private var scenePhase
     enum Panel: String, Identifiable { case connection, keyboard, controller; var id: String { rawValue } }
 
@@ -59,12 +60,15 @@ struct RemoteView: View {
             case .controller: ControllerSheet(relay: controller, session: session)
             }
         }
-        .task { controller.start(session: session) }
+        .task { controller.start(session: session); session.preferredQuality = quality }
+        .onChange(of: quality) { _, mode in session.sendQuality(mode) }
         .onChange(of: scenePhase) { _, phase in
-            if phase == .active { controller.start(session: session) }
-            else {
+            if phase == .active {
+                controller.start(session: session)
+                session.didBecomeActive() // reconecta sozinho se o sistema derrubou o socket
+            } else {
                 controller.stop()
-                session.disconnect()
+                session.didEnterBackground() // minimizou? a sessão continua viva
             }
         }
     }
@@ -78,7 +82,7 @@ struct RemoteView: View {
                 Text("REMOTE PLAY").font(.system(size: 9, weight: .semibold)).tracking(3).foregroundStyle(.secondary)
             }
             Spacer()
-            Text("0.4.1").font(.caption.monospaced()).foregroundStyle(.secondary)
+            Text("0.5.0").font(.caption.monospaced()).foregroundStyle(.secondary)
             tool(session.connected ? "power" : "plus", session.connected ? "Desconectar" : "Adicionar computador") {
                 if session.connected || session.connecting { controller.stop(); session.disconnect(); controller.start(session: session) }
                 else { sheet = .connection }
@@ -88,7 +92,7 @@ struct RemoteView: View {
 
     private var stage: some View {
         ZStack {
-            RemoteVideoView(frames: session.frames) { command in session.send(command) }
+            RemoteVideoView(frames: session.frames) { command, key in _ = session.send(command, coalesce: key) }
             if !session.connected {
                 VStack(spacing: 20) {
                     Image(systemName: "desktopcomputer").font(.system(size: 54, weight: .ultraLight)).foregroundStyle(.mint)
@@ -148,6 +152,18 @@ struct RemoteView: View {
             tool("keyboard", "Teclado remoto") { sheet = .keyboard }.disabled(!session.connected)
             tool("return", "Enter no Windows") { session.send(RemoteCommand(type: "key", button: "enter")) }.disabled(!session.connected)
             tool("computermouse", "Clique direito") { session.send(RemoteCommand(type: "click", button: "right")) }.disabled(!session.connected)
+            Menu {
+                ForEach(["auto", "performance", "balanced", "quality"], id: \.self) { mode in
+                    Button(qualityTitle(mode)) { quality = mode }
+                }
+            } label: {
+                Image(systemName: "gauge.with.dots.needle.33percent").font(.system(size: 17, weight: .medium))
+                    .frame(width: 44, height: 44)
+                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Qualidade do vídeo: \(qualityTitle(quality))")
+            .disabled(!session.connected)
             Spacer()
             tool(controller.detected ? "gamecontroller.fill" : "gamecontroller", "Configurar controle") { sheet = .controller }
                 .accessibilityIdentifier("controllerAction")
@@ -159,6 +175,15 @@ struct RemoteView: View {
         VStack(alignment: .leading, spacing: 6) {
             Text(title).font(.system(size: 8, weight: .bold)).tracking(1.6).foregroundStyle(.secondary)
             Text(value).font(.system(size: 13, weight: .medium, design: .monospaced))
+        }
+    }
+    private func qualityTitle(_ mode: String) -> String {
+        let check = (mode == quality) ? " ✓" : ""
+        switch mode {
+        case "performance": return "Performance (120 fps)" + check
+        case "balanced": return "Equilibrado (90 fps)" + check
+        case "quality": return "Qualidade (60 fps)" + check
+        default: return "Automático" + check
         }
     }
     private func tool(_ icon: String, _ title: String, action: @escaping () -> Void) -> some View {

@@ -34,4 +34,10 @@ final class LunaRemoteTests: XCTestCase {
         XCTAssertEqual(json["submit"] as? Bool, true)
         XCTAssertEqual(json["text"] as? String, "Olá 🎮")
     }
+    func testQualityCommandEncoding() throws {
+        let data = try JSONEncoder().encode(RemoteCommand(type: "quality", mode: "performance"))
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual(json["type"] as? String, "quality")
+        XCTAssertEqual(json["mode"] as? String, "performance")
+    }
 }

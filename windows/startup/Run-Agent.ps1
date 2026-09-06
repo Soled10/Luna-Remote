@@ -9,6 +9,8 @@ try {
     try { $env:LUNA_TOKEN = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($tokenPointer) }
     finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($tokenPointer) }
     $env:LUNA_PORT = '8765'
+    # The agent is private. Caddy terminates public TLS; cloudflared also reaches loopback.
+    $env:LUNA_BIND_HOST = '127.0.0.1'
     while ($true) {
         # An already running manual agent is left untouched. Wait until it exits.
         $probe = New-Object Net.Sockets.TcpClient
@@ -20,6 +22,7 @@ try {
 }
 finally {
     Remove-Item Env:LUNA_TOKEN -ErrorAction SilentlyContinue
+    Remove-Item Env:LUNA_BIND_HOST -ErrorAction SilentlyContinue
     $taskMutex.ReleaseMutex()
     $taskMutex.Dispose()
 }

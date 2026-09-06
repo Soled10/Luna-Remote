@@ -12,7 +12,15 @@ internal sealed class FrameWindow : IDisposable
     public double LatencyMs { get { lock (gate) return latency; } }
     public async Task<int> Reserve(CancellationToken ct)
     {
-        if (!await slots.WaitAsync(TimeSpan.FromSeconds(8), ct)) throw new TimeoutException("Video acknowledgement timed out.");
+        if (!await slots.WaitAsync(TimeSpan.FromSeconds(8), ct).ConfigureAwait(false))
+            throw new TimeoutException("Video acknowledgement timed out.");
+        lock (gate) { int id = ++next; pending.Add(id, Stopwatch.GetTimestamp()); return id; }
+    }
+    // Null on timeout (client may be backgrounded: caller should pause, not kill).
+    // Throws OperationCanceledException on cancellation.
+    public int? TryReserve(TimeSpan timeout, CancellationToken ct)
+    {
+        if (!slots.Wait(timeout, ct)) return null;
         lock (gate) { int id = ++next; pending.Add(id, Stopwatch.GetTimestamp()); return id; }
     }
     public void Acknowledge(int id)

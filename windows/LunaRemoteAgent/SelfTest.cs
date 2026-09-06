@@ -19,6 +19,30 @@ internal static class SelfTest
         catch (FormatException) { Console.WriteLine("PASS reject unknown key"); }
         Check(InputProtocol.Parse("""{"type":"frameAck","x":42}""").X == 42, "Frame acknowledgement protocol");
         Check(InputProtocol.Parse("""{"type":"ping","id":"rtt"}""").Id == "rtt", "RTT protocol");
+        Check(InputProtocol.Parse("""{"type":"quality","mode":"performance"}""").Mode == "performance", "Quality protocol");
+        try { InputProtocol.Parse("""{"type":"quality","mode":"ultra"}"""); throw new Exception("Unknown quality accepted"); }
+        catch (FormatException) { Console.WriteLine("PASS reject unknown quality"); }
+        var previousFps = Environment.GetEnvironmentVariable("LUNA_MAX_FPS");
+        try
+        {
+            Environment.SetEnvironmentVariable("LUNA_MAX_FPS", "90");
+            Check(Program.MaxFps() == 90, "Configurable frame ceiling");
+            Environment.SetEnvironmentVariable("LUNA_MAX_FPS", "999");
+            Check(Program.MaxFps() == 144, "Frame ceiling clamped");
+            Environment.SetEnvironmentVariable("LUNA_MAX_FPS", "bogus");
+            Check(Program.MaxFps() == 120, "Frame ceiling defaults to 120");
+        }
+        finally { Environment.SetEnvironmentVariable("LUNA_MAX_FPS", previousFps); }
+        var previousBind = Environment.GetEnvironmentVariable("LUNA_BIND_HOST");
+        try
+        {
+            Environment.SetEnvironmentVariable("LUNA_BIND_HOST", "127.0.0.1");
+            Check(Program.ListenPrefix(8765) == "http://127.0.0.1:8765/remote/", "Loopback host binding");
+            Environment.SetEnvironmentVariable("LUNA_BIND_HOST", "invalid.example");
+            try { Program.ListenPrefix(8765); throw new Exception("Unsafe host accepted"); }
+            catch (InvalidOperationException) { Console.WriteLine("PASS reject unsafe bind host"); }
+        }
+        finally { Environment.SetEnvironmentVariable("LUNA_BIND_HOST", previousBind); }
         Check(FrameWindow.Packet(42, [255, 216]).SequenceEqual(new byte[] { 76, 82, 48, 51, 42, 0, 0, 0, 255, 216 }), "Video header little endian");
         using var window = new FrameWindow();
         int first = window.Reserve(CancellationToken.None).GetAwaiter().GetResult();
@@ -34,5 +58,13 @@ internal static class SelfTest
         cancel.Cancel();
         try { fourth.GetAwaiter().GetResult(); throw new Exception("Cancellation ignored"); }
         catch (OperationCanceledException) { Console.WriteLine("PASS video credit cancellation"); }
+        using var paused = new FrameWindow();
+        paused.Reserve(CancellationToken.None).GetAwaiter().GetResult();
+        paused.Reserve(CancellationToken.None).GetAwaiter().GetResult();
+        Check(paused.TryReserve(TimeSpan.FromMilliseconds(50), CancellationToken.None) == null, "Stalled client pauses instead of killing session");
+        using var cancelPause = new CancellationTokenSource();
+        cancelPause.Cancel();
+        try { paused.TryReserve(TimeSpan.FromSeconds(5), cancelPause.Token); throw new Exception("Pause ignores cancellation"); }
+        catch (OperationCanceledException) { Console.WriteLine("PASS paused video honours cancellation"); }
     }
 }

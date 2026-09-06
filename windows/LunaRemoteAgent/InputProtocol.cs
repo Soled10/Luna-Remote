@@ -3,7 +3,7 @@ using System.Text;
 using System.Text.Json;
 
 internal record InputCommand(string Type, string Text = "", bool Submit = false, string Id = "",
-    int X = 0, int Y = 0, string Button = "", bool Down = false, GamepadState? Pad = null);
+    int X = 0, int Y = 0, string Button = "", bool Down = false, GamepadState? Pad = null, string Mode = "");
 internal record GamepadState(ushort Buttons, short LX, short LY, short RX, short RY, byte LT, byte RT);
 
 internal static class InputProtocol
@@ -57,6 +57,10 @@ internal static class InputProtocol
             case "release": return new(type);
             case "frameAck": return new(type, X: Int("x", 1, int.MaxValue));
             case "ping": return new(type, Id: Str("id"));
+            case "quality":
+                var mode = Str("mode").ToLowerInvariant();
+                if (mode is not ("auto" or "performance" or "balanced" or "quality")) throw new FormatException("Unknown quality");
+                return new(type, Mode: mode);
             default: throw new FormatException("Unknown command");
         }
     }

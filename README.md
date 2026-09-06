@@ -1,4 +1,4 @@
-# Luna Remote 0.4.1
+# Luna Remote 0.5.0
 
 Cliente iOS SwiftUI + agente Windows 10/11. Protótipo de controle remoto; **não é equivalente ao Parsec e não promete zero latência**.
 
@@ -6,17 +6,21 @@ Cliente iOS SwiftUI + agente Windows 10/11. Protótipo de controle remoto; **nã
 
 - Tela cheia, paisagem, trackpad, rolagem e arraste; teclado com envio Unicode + Enter em um único comando confirmado pelo host.
 - Controle conectado ao iPhone encaminhado como Xbox 360 virtual no Windows. Exige ViGEmBus já instalado; o aplicativo não instala drivers. Um controle, sem vibração e sem transmissão de áudio nesta versão. ViGEm é um projeto encerrado pelo fornecedor.
-- Captura da tela principal com GDI, **JPEG sobre WebSocket**, não H.264/HEVC. O perfil atual tem teto de 60 fps em 1280 pixels de largura; rede/decodificação lentas reduzem para 960 pixels e teto de 30 fps. FPS real depende do hardware, jogo e conexão.
-- Protocolo 3 mantém no máximo dois quadros sem confirmação do cliente. Novos quadros são capturados somente quando há espaço; clientes antigos recebem JPEG sem cabeçalho.
+- **Cursor real do Windows**: forma verdadeira (seta, I-beam, mão…) desenhada no quadro e posição enviada ao iPhone, que mostra uma seta nítida sobre o vídeo em qualquer resolução.
+- Captura da tela principal com GDI, **JPEG sobre WebSocket**, não H.264/HEVC. Teto de **120 fps** (telas ProMotion) com espera de precisão sub-milissegundo; `LUNA_MAX_FPS` ajusta o teto (30–144). Modos pedidos pelo iPhone: Performance (120 fps/960px), Equilibrado (90 fps/1280px), Qualidade (60 fps/1600px) e Automático adaptativo; rede lenta reduz para 960 pixels e 30 fps. FPS real depende do hardware, jogo e conexão.
+- **A sessão sobrevive ao minimizar o app**: sem acks, o agente pausa o vídeo e mantém a conexão; ao voltar, o iPhone reconecta sozinho. Quedas de rede também reconectam com backoff.
+- Protocolo 3 mantém no máximo dois quadros sem confirmação do cliente. O iPhone confirma cada quadro na chegada (mede só a rede) e decodifica em paralelo, descartando quadros velhos; arrastos do trackpad e rolagem são coalescidos antes do envio.
 - Decodificação assíncrona no iPhone; só a superfície de vídeo observa cada quadro. FPS, resolução e RTT são atualizados separadamente.
-- Controle amostrado a 60 Hz, estados repetidos suprimidos com heartbeat de 250 ms; transições de botões são ordenadas. Comandos têm fila limitada e a sessão é encerrada se congestionar. Inputs mantidos são liberados pelo host após perda da conexão/heartbeat.
+- Controle amostrado a 60 Hz, estados repetidos suprimidos com heartbeat de 250 ms; transições de botões são ordenadas. Comandos têm fila limitada; congestionamento agora tenta reconectar em vez de encerrar. Inputs mantidos são liberados pelo host após perda da conexão/heartbeat.
 - RTT exibido é ida e volta de uma mensagem do app, **não** medição de latência entre apertar o botão e ver o resultado na tela.
 - Serviço de túnel e notificação Discord: veja `windows/startup/README.md`.
+- Gateway por domínio próprio, DNS-only e certificado automático: veja `windows/direct-gateway/README.md`. Ele está pronto, mas não é ativado até você definir o domínio e configurar o roteador.
 
 ## Executar o host
 
 ```powershell
 $env:LUNA_TOKEN = "seu-token-forte-exclusivo"
+$env:LUNA_MAX_FPS = "120"   # opcional: teto de fps, 30–144 (padrão 120)
 dotnet run --project .\windows\LunaRemoteAgent
 ```
 

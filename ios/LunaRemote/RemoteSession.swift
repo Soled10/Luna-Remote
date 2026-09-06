@@ -15,22 +15,45 @@ final class RemoteSession: ObservableObject {
     @Published var acknowledgedText = ""
     @Published var inputError = ""
     @Published var roundTripMs = 0
+    /// Qualidade pedida ao agente ("auto", "performance", "balanced", "quality").
+    var preferredQuality = "auto"
+    private var session: URLSession?
     private var socket: URLSessionWebSocketTask?
     private var inbox: Task<Void, Never>?
     private var outbox: Task<Void, Never>?
     private var heartbeat: Task<Void, Never>?
+    private var reconnectTask: Task<Void, Never>?
+    private var reconnectDelay = 1.0
+    private var wantsConnection = false
+    private var lastHost = ""
+    private var lastToken = ""
     private var pendingPing: (id: String, started: TimeInterval)?
     private var queue: [(data: Data, key: String?)] = []
     private var counter = 0
     private var measuredAt = Date()
+    private var lastShownSequence = 0
     private var generation = UUID()
+    private var bgTask = UIBackgroundTaskIdentifier.invalid
 
     func connect(host: String, token: String) {
-        disconnect()
+        wantsConnection = true
+        lastHost = host
+        lastToken = token
+        reconnectDelay = 1.0
+        reconnectTask?.cancel(); reconnectTask = nil
+        startConnection()
+    }
+
+    private func startConnection() {
+        tearDown()
         do {
-            guard !token.isEmpty else { throw SessionError.missingToken }
-            let url = try RemoteEndpoint.url(host: host, token: token)
-            let ws = URLSession.shared.webSocketTask(with: url)
+            guard !lastToken.isEmpty else { throw SessionError.missingToken }
+            let url = try RemoteEndpoint.url(host: lastHost, token: lastToken)
+            let config = URLSessionConfiguration.default
+            config.waitsForConnectivity = true
+            let sess = URLSession(configuration: config)
+            session = sess
+            let ws = sess.webSocketTask(with: url)
             ws.maximumMessageSize = 16 * 1024 * 1024
             socket = ws
             let id = generation
@@ -38,13 +61,14 @@ final class RemoteSession: ObservableObject {
             connecting = true
             measuredAt = Date(); counter = 0
             ws.resume()
+            enqueue(RemoteCommand(type: "quality", mode: preferredQuality))
             heartbeat = Task { [weak self] in
                 while !Task.isCancelled {
                     do { try await Task.sleep(for: .seconds(2)) } catch { return }
                     guard let self, self.generation == id else { return }
                     if let ping = self.pendingPing {
                         if ProcessInfo.processInfo.systemUptime - ping.started > 8 {
-                            self.disconnect(); self.status = "Conexão sem resposta. Reconecte para continuar."; return
+                            self.handleDrop("Conexão sem resposta. Reconectando…"); return
                         }
                     } else if self.connected && self.protocolVersion >= 3 {
                         let pingID = UUID().uuidString
@@ -60,37 +84,52 @@ final class RemoteSession: ObservableObject {
                         guard let self, self.generation == id else { return }
                         switch message {
                         case .data(let data):
-                            let packet = VideoPacket(data)
-                            guard let encoded = UIImage(data: packet.jpeg),
-                                  let image = await encoded.byPreparingForDisplay() else {
-                                throw SessionError.invalidFrame
-                            }
-                            guard self.generation == id, !Task.isCancelled else { return }
-                            self.frames.image = image
-                            if !self.connected {
-                                self.connected = true; self.connecting = false
-                                self.status = "Sessão ativa"
-                                UIApplication.shared.isIdleTimerDisabled = true
-                            }
-                            if let sequence = packet.sequence { self.send(RemoteCommand(type: "frameAck", x: sequence)) }
-                            self.counter += 1
-                            let elapsed = Date().timeIntervalSince(self.measuredAt)
-                            if elapsed >= 1 {
-                                self.fps = Int((Double(self.counter) / elapsed).rounded())
-                                self.resolution = "\(Int(image.size.width)) × \(Int(image.size.height))"
-                                self.counter = 0; self.measuredAt = Date()
-                            }
+                            self.receivedFrame(data, id: id)
                         case .string(let text): self.handle(text)
                         @unknown default: break
                         }
                     }
                 } catch {
                     guard let self, self.generation == id, !Task.isCancelled else { return }
-                    self.disconnect()
-                    self.status = "Falha na conexão: \(error.localizedDescription)"
+                    self.handleDrop("Falha na conexão: \(error.localizedDescription)")
                 }
             }
         } catch { status = error.localizedDescription }
+    }
+
+    // O ack sai assim que o pacote chega (mede a rede, não o decode), e o decode
+    // roda em paralelo: quadros lentos nunca seguram a chegada do próximo.
+    private func receivedFrame(_ data: Data, id: UUID) {
+        let packet = VideoPacket(data)
+        // Ack direto na fila (sem exigir `connected`): o 1º quadro também libera
+        // crédito no servidor, senão a janela de fluxo encolheria para sempre.
+        if let sequence = packet.sequence { enqueue(RemoteCommand(type: "frameAck", x: sequence)) }
+        let jpeg = packet.jpeg
+        Task.detached(priority: .userInitiated) { [weak self] in
+            guard let encoded = UIImage(data: jpeg),
+                  let image = await encoded.byPreparingForDisplay() else { return }
+            await MainActor.run { [weak self] in
+                guard let self, self.generation == id else { return }
+                if let sequence = packet.sequence {
+                    guard sequence >= self.lastShownSequence else { return } // descarta decode velho
+                    self.lastShownSequence = sequence
+                }
+                self.frames.image = image
+                if !self.connected {
+                    self.connected = true; self.connecting = false
+                    self.status = "Sessão ativa"
+                    self.reconnectDelay = 1.0
+                    UIApplication.shared.isIdleTimerDisabled = true
+                }
+                self.counter += 1
+                let elapsed = Date().timeIntervalSince(self.measuredAt)
+                if elapsed >= 1 {
+                    self.fps = Int((Double(self.counter) / elapsed).rounded())
+                    self.resolution = "\(Int(image.size.width)) × \(Int(image.size.height))"
+                    self.counter = 0; self.measuredAt = Date()
+                }
+            }
+        }
     }
 
     private func handle(_ text: String) {
@@ -107,6 +146,10 @@ final class RemoteSession: ObservableObject {
                 roundTripMs = Int(((ProcessInfo.processInfo.systemUptime - ping.started) * 1000).rounded())
                 pendingPing = nil
             }
+        case "cursor":
+            frames.cursorX = reply.x ?? frames.cursorX
+            frames.cursorY = reply.y ?? frames.cursorY
+            frames.cursorVisible = reply.visible ?? true
         case "error": inputError = reply.message ?? "O Windows recusou o comando."
         default: break
         }
@@ -114,14 +157,19 @@ final class RemoteSession: ObservableObject {
 
     @discardableResult
     func send<T: Encodable>(_ command: T, coalesce: String? = nil) -> Bool {
-        guard connected, socket != nil, let data = try? JSONEncoder().encode(command) else { return false }
+        guard connected else { return false }
+        return enqueue(command, coalesce: coalesce)
+    }
+
+    @discardableResult
+    private func enqueue<T: Encodable>(_ command: T, coalesce: String? = nil) -> Bool {
+        guard socket != nil, let data = try? JSONEncoder().encode(command) else { return false }
         // Only replace adjacent analog states: never reorder a button transition.
         if let key = coalesce, queue.last?.key == key {
             queue[queue.count - 1] = (data, key)
         } else {
             guard queue.count < 64 else {
-                disconnect()
-                status = "Rede congestionada: sessão interrompida para não acumular comandos."
+                handleDrop("Rede congestionada: reconectando sem acumular comandos.")
                 inputError = status
                 return false
             }
@@ -129,6 +177,11 @@ final class RemoteSession: ObservableObject {
         }
         drain()
         return true
+    }
+
+    func sendQuality(_ mode: String) {
+        preferredQuality = mode
+        enqueue(RemoteCommand(type: "quality", mode: mode))
     }
 
     func submitText(_ text: String, enter: Bool, id: String) -> Bool {
@@ -150,24 +203,82 @@ final class RemoteSession: ObservableObject {
                 if self.generation == id { self.outbox = nil }
             } catch {
                 if self.generation == id {
-                    self.disconnect()
-                    self.status = "Envio interrompido: \(error.localizedDescription)"
+                    self.handleDrop("Envio interrompido: \(error.localizedDescription)")
                 }
             }
         }
     }
 
+    // MARK: - Quedas e reconexão
+
+    private func handleDrop(_ message: String) {
+        let retry = wantsConnection
+        tearDown()
+        status = message
+        if retry { scheduleReconnect() }
+    }
+
+    private func scheduleReconnect() {
+        reconnectTask?.cancel()
+        let delay = reconnectDelay
+        reconnectDelay = min(15, reconnectDelay * 2)
+        status += " Tentando de novo em \(Int(delay))s…"
+        reconnectTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            guard let self, !Task.isCancelled else { return }
+            await MainActor.run {
+                if self.wantsConnection && !self.connected { self.startConnection() }
+            }
+        }
+    }
+
+    // MARK: - Segundo plano: a sessão sobrevive ao minimizar
+
+    func didEnterBackground() {
+        endBgTask()
+        bgTask = UIApplication.shared.beginBackgroundTask(withName: "LunaRemote") { [weak self] in
+            Task { @MainActor [weak self] in self?.endBgTask() }
+        }
+        // O agente pausa o vídeo sozinho quando os acks param; o socket fica aberto.
+    }
+
+    func didBecomeActive() {
+        endBgTask()
+        pendingPing = nil // evita "sem resposta" fantasma de antes de minimizar
+        if wantsConnection && !connected && !connecting {
+            reconnectTask?.cancel(); reconnectTask = nil
+            reconnectDelay = 1.0
+            startConnection()
+        }
+    }
+
+    private func endBgTask() {
+        if bgTask != .invalid {
+            UIApplication.shared.endBackgroundTask(bgTask)
+            bgTask = .invalid
+        }
+    }
+
     func disconnect() {
+        wantsConnection = false
+        reconnectTask?.cancel(); reconnectTask = nil
+        endBgTask()
+        tearDown()
+        status = "Desconectado"
+    }
+
+    private func tearDown() {
         generation = UUID()
         inbox?.cancel(); inbox = nil
         outbox?.cancel(); outbox = nil
         heartbeat?.cancel(); heartbeat = nil; pendingPing = nil; roundTripMs = 0
         queue.removeAll()
         socket?.cancel(with: .goingAway, reason: nil); socket = nil
+        session?.invalidateAndCancel(); session = nil
         connected = false; connecting = false; gamepadReady = false
-        protocolVersion = 0; frames.image = nil; fps = 0; resolution = "—"
+        protocolVersion = 0; frames.image = nil; frames.cursorVisible = false
+        fps = 0; resolution = "—"; lastShownSequence = 0
         gamepadStatus = "Conecte ao PC para verificar"
-        status = "Desconectado"
         UIApplication.shared.isIdleTimerDisabled = false
     }
 
@@ -188,12 +299,18 @@ final class RemoteSession: ObservableObject {
         let gamepadStatus: String?
         let id: String?
         let message: String?
+        let x: Double?
+        let y: Double?
+        let visible: Bool?
     }
 }
 
 @MainActor
 final class RemoteFrames: ObservableObject {
     @Published var image: UIImage?
+    @Published var cursorX = 0.5
+    @Published var cursorY = 0.5
+    @Published var cursorVisible = false
 }
 
 struct VideoPacket {
@@ -217,4 +334,5 @@ struct RemoteCommand: Encodable {
     var y: Int? = nil
     var button: String? = nil
     var down: Bool? = nil
+    var mode: String? = nil
 }

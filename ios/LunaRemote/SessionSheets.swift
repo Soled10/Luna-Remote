@@ -9,7 +9,7 @@ struct ConnectionSheet: View {
         NavigationStack {
             Form {
                 Section("Seu computador") {
-                    TextField("https://seu-tunel.trycloudflare.com", text: $address)
+                    TextField("https://jogar.seudominio.com", text: $address)
                         .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
                         .accessibilityIdentifier("addressField")
                     SecureField("Token do agente Windows", text: $token)
@@ -17,7 +17,7 @@ struct ConnectionSheet: View {
                         .accessibilityIdentifier("tokenField")
                 }
                 Section {
-                    Text("Cole o endereço HTTPS mostrado pelo Cloudflare ou Tailscale. Se reiniciar um túnel temporário, atualize o endereço aqui.")
+                    Text("Para jogar fora, use seu domínio HTTPS próprio. O domínio temporário Cloudflare continua como alternativa quando o acesso direto não estiver disponível.")
                     Text("O token fica apenas na memória desta tela.")
                 }.font(.footnote).foregroundStyle(.secondary)
                 Button {

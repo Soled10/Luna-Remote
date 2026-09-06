@@ -10,4 +10,5 @@ if ($LASTEXITCODE -ne 0) { throw 'Falha ao publicar agente.' }
 foreach ($name in @('Install-Startup.ps1', 'Uninstall-Startup.ps1', 'Run-Agent.ps1', 'Save-Webhook.ps1', 'README.md')) {
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot $name) -Destination $Destination -Force
 }
+Copy-Item -LiteralPath (Join-Path $windowsRoot 'direct-gateway') -Destination $Destination -Recurse -Force
 Write-Host "Pacote Windows x64: $Destination"

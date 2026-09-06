@@ -5,6 +5,7 @@ on:
   push:
     paths:
       - 'ios/**'
+      - 'windows/**'
       - '.github/workflows/ios.yml'
 
 jobs:
@@ -38,6 +39,9 @@ jobs:
           xcrun simctl launch "$DEVICE" com.luna.remote
           sleep 5
           xcrun simctl io "$DEVICE" screenshot build/LunaRemote-launch.png
+          xcodebuild test -project ios/LunaRemote.xcodeproj \
+            -scheme LunaRemote -destination "platform=iOS Simulator,id=$DEVICE" \
+            -derivedDataPath build/DerivedData CODE_SIGNING_ALLOWED=NO
       - uses: actions/upload-artifact@v4
         with:
           name: LunaRemote-simulator
@@ -50,6 +54,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install XcodeGen
         run: brew install xcodegen
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_16.4.app
       - name: Generate Xcode project
         working-directory: ios
         run: |
@@ -79,4 +85,27 @@ jobs:
           path: |
             build/LunaRemote-unsigned.ipa
             build/ipa-validation.json
+          if-no-files-found: error
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Build Windows package
+        shell: pwsh
+        run: ./windows/startup/Build-Package.ps1 -Destination ./build/LunaRemote-Windows
+      - name: Test input and streaming protocol
+        shell: pwsh
+        run: |
+          & ./build/LunaRemote-Windows/agent/LunaRemoteAgent.exe --self-test
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & ./build/LunaRemote-Windows/service/LunaRemoteStartup.exe --self-test
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LunaRemote-Windows
+          path: build/LunaRemote-Windows
           if-no-files-found: error

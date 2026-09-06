@@ -5,6 +5,7 @@ on:
   push:
     paths:
       - 'ios/**'
+      - '.github/workflows/ios.yml'
 
 jobs:
   build:
@@ -15,7 +16,9 @@ jobs:
         run: brew install xcodegen
       - name: Generate Xcode project
         working-directory: ios
-        run: xcodegen generate
+        run: |
+          swift scripts/icon.swift
+          xcodegen generate
       - name: Select Xcode
         run: sudo xcode-select -s /Applications/Xcode_16.4.app
       - name: Build simulator target
@@ -26,6 +29,20 @@ jobs:
             -configuration Debug \
             -derivedDataPath build/DerivedData \
           CODE_SIGNING_ALLOWED=NO build
+      - name: Install and launch in simulator
+        run: |
+          DEVICE=$(xcrun simctl create LunaSmoke com.apple.CoreSimulator.SimDeviceType.iPhone-16)
+          xcrun simctl boot "$DEVICE"
+          xcrun simctl bootstatus "$DEVICE" -b
+          xcrun simctl install "$DEVICE" build/DerivedData/Build/Products/Debug-iphonesimulator/LunaRemote.app
+          xcrun simctl launch "$DEVICE" com.luna.remote
+          sleep 5
+          xcrun simctl io "$DEVICE" screenshot build/LunaRemote-launch.png
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LunaRemote-simulator
+          path: build/LunaRemote-launch.png
+          if-no-files-found: error
 
   unsigned-ipa:
     runs-on: macos-15
@@ -35,7 +52,9 @@ jobs:
         run: brew install xcodegen
       - name: Generate Xcode project
         working-directory: ios
-        run: xcodegen generate
+        run: |
+          swift scripts/icon.swift
+          xcodegen generate
       - name: Archive unsigned device build
         run: |
           xcodebuild archive \
@@ -52,7 +71,12 @@ jobs:
           cp -R build/LunaRemote.xcarchive/Products/Applications/LunaRemote.app build/unsigned/Payload/
           cd build/unsigned
           zip -r ../LunaRemote-unsigned.ipa Payload
+      - name: Validate device IPA
+        run: python3 ios/scripts/validate_ipa.py build/LunaRemote-unsigned.ipa > build/ipa-validation.json
       - uses: actions/upload-artifact@v4
         with:
           name: LunaRemote-unsigned-ipa
-          path: build/LunaRemote-unsigned.ipa
+          path: |
+            build/LunaRemote-unsigned.ipa
+            build/ipa-validation.json
+          if-no-files-found: error

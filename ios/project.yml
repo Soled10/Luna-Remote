@@ -20,10 +20,10 @@ targets:
       PRODUCT_BUNDLE_IDENTIFIER: com.luna.remote
       GENERATE_INFOPLIST_FILE: YES
       SWIFT_VERSION: 5.0
-      MARKETING_VERSION: 0.2.0
-      CURRENT_PROJECT_VERSION: 2
+      MARKETING_VERSION: 0.2.1
+      CURRENT_PROJECT_VERSION: 3
+      ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
       TARGETED_DEVICE_FAMILY: '1,2'
       INFOPLIST_KEY_CFBundleDisplayName: Luna Remote
       INFOPLIST_KEY_UIRequiresFullScreen: true
-      INFOPLIST_KEY_NSCameraUsageDescription: Luna Remote não usa a câmera.
       INFOPLIST_KEY_NSLocalNetworkUsageDescription: Luna Remote precisa encontrar seu computador Windows na rede local.

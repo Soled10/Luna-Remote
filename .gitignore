@@ -5,3 +5,5 @@ DerivedData/
 *.p12
 *.mobileprovision
 .DS_Store
+bin/
+obj/

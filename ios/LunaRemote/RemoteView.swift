@@ -103,7 +103,7 @@ struct RemoteView: View {
             .sheet(isPresented: $showPairing) {
                 VStack(spacing: 16) {
                     Text("Adicionar computador").font(.title2.bold())
-                    TextField("IP do Windows (ex.: 192.168.0.10)", text: $host).textFieldStyle(.roundedBorder).keyboardType(.URL)
+                    TextField("IP ou URL Tailscale HTTPS", text: $host).textFieldStyle(.roundedBorder).keyboardType(.URL)
                     SecureField("Token do agente", text: $token).textFieldStyle(.roundedBorder)
                     Button("Conectar") {
                         session.connect(host: host, token: token); showPairing = false

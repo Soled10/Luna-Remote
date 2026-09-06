@@ -10,12 +10,17 @@ final class RemoteSession: ObservableObject {
 
     func connect(host: String, token: String, port: Int = 8765) {
         disconnect()
-        let host = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        var host = host.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !host.hasPrefix("127."), host != "localhost", host != "::1" else {
             status = "Use o IP do Windows. 127.0.0.1 aponta para o próprio iPhone."
             return
         }
-        guard var components = URLComponents(string: "ws://\(host):\(port)/remote/") else { return }
+        let scheme = host.hasPrefix("https://") ? "wss" : "ws"
+        host = host.replacingOccurrences(of: "https://", with: "")
+            .replacingOccurrences(of: "http://", with: "")
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let portPart = host.contains(":") ? "" : ":\(port)"
+        guard var components = URLComponents(string: "\(scheme)://\(host)\(portPart)/remote/") else { return }
         components.queryItems = [URLQueryItem(name: "token", value: token)]
         guard let url = components.url else { return }
         socket = URLSession.shared.webSocketTask(with: url)

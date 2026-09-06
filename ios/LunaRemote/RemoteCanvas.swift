@@ -43,7 +43,7 @@ struct RemoteCanvas: UIViewRepresentable {
             let double = UITapGestureRecognizer(target: self, action: #selector(doubleClick))
             double.numberOfTapsRequired = 2
             single.require(toFail: double)
-            let pan = UIPanGestureRecognizer(target: self, action: #selector(move(_:)))
+            let pan = UIPanGestureRecognizer(target: self, action: #selector(handlePointerPan(_:)))
             pan.minimumNumberOfTouches = 1; pan.maximumNumberOfTouches = 1
             let scroll = UIPanGestureRecognizer(target: self, action: #selector(scroll(_:)))
             scroll.minimumNumberOfTouches = 2; scroll.maximumNumberOfTouches = 2
@@ -66,7 +66,7 @@ struct RemoteCanvas: UIViewRepresentable {
             fractional.x -= CGFloat(x); fractional.y -= CGFloat(y)
             if x != 0 || y != 0 { send?(RemoteCommand(type: "move", x: x, y: y)) }
         }
-        @objc private func move(_ gesture: UIPanGestureRecognizer) {
+        @objc private func handlePointerPan(_ gesture: UIPanGestureRecognizer) {
             if gesture.state == .began { fractional = .zero }
             delta(gesture.translation(in: self))
             gesture.setTranslation(.zero, in: self)

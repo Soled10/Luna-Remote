@@ -6,7 +6,7 @@ struct RemoteView: View {
     @State private var showKeyboard = false
     private var connected: Bool { session.connected }
     @State private var showPairing = false
-    @State private var host = "192.168.100.7"
+    @State private var host = "https://desktop-ogch6mf.tail1eb997.ts.net"
     @State private var token = ""
     @State private var lastGesture = "Toque na tela para controlar o Windows"
 
@@ -103,7 +103,7 @@ struct RemoteView: View {
             .sheet(isPresented: $showPairing) {
                 VStack(spacing: 16) {
                     Text("Adicionar computador").font(.title2.bold())
-                    TextField("IP ou URL Tailscale HTTPS", text: $host).textFieldStyle(.roundedBorder).keyboardType(.URL)
+                    TextField("URL HTTPS do Tailscale", text: $host).textFieldStyle(.roundedBorder).keyboardType(.URL)
                     SecureField("Token do agente", text: $token).textFieldStyle(.roundedBorder)
                     Button("Conectar") {
                         session.connect(host: host, token: token); showPairing = false

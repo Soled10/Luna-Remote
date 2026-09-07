@@ -41,11 +41,20 @@ jobs:
           xcrun simctl io "$DEVICE" screenshot build/LunaRemote-launch.png
           xcodebuild test -project ios/LunaRemote.xcodeproj \
             -scheme LunaRemote -destination "platform=iOS Simulator,id=$DEVICE" \
-            -derivedDataPath build/DerivedData CODE_SIGNING_ALLOWED=NO
+            -derivedDataPath build/DerivedData -resultBundlePath build/Tests.xcresult CODE_SIGNING_ALLOWED=NO
+      - name: Export test screenshots
+        if: always()
+        run: |
+          if [ -d build/Tests.xcresult ]; then
+            xcrun xcresulttool export attachments --path build/Tests.xcresult --output-path build/UI
+          fi
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: LunaRemote-simulator
-          path: build/LunaRemote-launch.png
+          path: |
+            build/LunaRemote-launch.png
+            build/UI
           if-no-files-found: error
 
   unsigned-ipa:

@@ -261,6 +261,7 @@ final class RemoteSession: ObservableObject {
 
     func disconnect() {
         wantsConnection = false
+        lastHost = ""; lastToken = ""
         reconnectTask?.cancel(); reconnectTask = nil
         endBgTask()
         tearDown()

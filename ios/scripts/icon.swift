@@ -1,6 +1,16 @@
 import AppKit
 let folder = "LunaRemote/Assets.xcassets/AppIcon.appiconset"
 try FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: true)
+
+// Keep the checked-in Luna Remote brand asset when available. The fallback
+// drawing below keeps local builds self-contained if the asset is absent.
+let brandedIcon = URL(fileURLWithPath: folder + "/AppIcon.png")
+if FileManager.default.fileExists(atPath: brandedIcon.path) {
+    let catalog: [String: Any] = ["images": [["filename": "AppIcon.png", "idiom": "universal", "platform": "ios", "size": "1024x1024"]], "info": ["author": "xcode", "version": 1]]
+    try JSONSerialization.data(withJSONObject: catalog, options: .prettyPrinted).write(to: URL(fileURLWithPath: folder + "/Contents.json"))
+    exit(0)
+}
+
 let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 1024, pixelsHigh: 1024, bitsPerSample: 8, samplesPerPixel: 3, hasAlpha: false, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
 NSGraphicsContext.saveGraphicsState()
 NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: bitmap)

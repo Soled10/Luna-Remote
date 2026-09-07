@@ -9,7 +9,7 @@ final class LunaRemoteTests: XCTestCase {
         XCTAssertNil(parts.port)
         XCTAssertEqual(parts.path, "/remote/")
         XCTAssertEqual(parts.queryItems?.first { $0.name == "token" }?.value, "a&b #")
-        XCTAssertEqual(parts.queryItems?.first { $0.name == "protocol" }?.value, "3")
+        XCTAssertEqual(parts.queryItems?.first { $0.name == "protocol" }?.value, "4")
     }
     func testLocalEndpointAndLoopback() throws {
         let local = try RemoteEndpoint.url(host: "192.168.100.7", token: "test")
@@ -39,5 +39,26 @@ final class LunaRemoteTests: XCTestCase {
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
         XCTAssertEqual(json["type"] as? String, "quality")
         XCTAssertEqual(json["mode"] as? String, "performance")
+    }
+    @MainActor
+    func testRegionCompositing() throws {
+        let comp = FrameCompositor()
+        func solid(_ r: CGFloat, _ g: CGFloat, _ b: CGFloat, w: Int, h: Int) -> UIImage {
+            let fmt = UIGraphicsImageRendererFormat(); fmt.scale = 1
+            return UIGraphicsImageRenderer(size: CGSize(width: w, height: h), format: fmt).image { ctx in
+                UIColor(red: r, green: g, blue: b, alpha: 1).setFill()
+                ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
+            }
+        }
+        func bytes(_ image: UIImage) throws -> Data {
+            try XCTUnwrap(image.cgImage?.dataProvider?.data as Data?)
+        }
+        let full = try XCTUnwrap(comp.draw(tile: solid(1, 0, 0, w: 64, h: 64),
+            region: .init(x: 0, y: 0, w: 64, h: 64, full: true, frame: 1), sequence: 1))
+        XCTAssertEqual(full.size, CGSize(width: 64, height: 64))
+        let patched = try XCTUnwrap(comp.draw(tile: solid(0, 0, 1, w: 16, h: 16),
+            region: .init(x: 8, y: 8, w: 16, h: 16, full: false, frame: 2), sequence: 2))
+        XCTAssertEqual(patched.size, CGSize(width: 64, height: 64))
+        XCTAssertNotEqual(try bytes(full), try bytes(patched))
     }
 }

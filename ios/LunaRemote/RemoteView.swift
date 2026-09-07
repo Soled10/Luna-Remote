@@ -47,7 +47,7 @@ struct RemoteView: View {
                     VStack {
                         HStack {
                             if hudVisible {
-                                Label(session.connected ? "\(session.fps) FPS · \(session.roundTripMs) ms RTT" : "Desconectado", systemImage: "waveform.path")
+                                Label(session.connected ? "\(session.fps) FPS · \(bitrateText) · \(session.roundTripMs) ms" : "Desconectado", systemImage: "waveform.path")
                                     .font(.caption.monospacedDigit())
                                     .padding(10).background(.ultraThinMaterial, in: Capsule())
                                 Spacer()
@@ -136,7 +136,7 @@ struct RemoteView: View {
             if !fullscreen {
                 VStack {
                     HStack {
-                        Circle().fill(session.connected ? Color.mint : Color.gray).frame(width: 6, height: 6)
+                        Circle().fill(linkColor).frame(width: 6, height: 6)
                         Text(session.connected ? "AO VIVO" : "SUA SESSÃO").font(.system(size: 9, weight: .bold)).tracking(2)
                         Spacer()
                         tool("arrow.up.left.and.arrow.down.right", "Tela cheia") { fullscreen = true; hudVisible = true }
@@ -148,8 +148,12 @@ struct RemoteView: View {
         }
         .background(Color.black)
         .clipShape(RoundedRectangle(cornerRadius: fullscreen ? 0 : 24))
+        .shadow(color: session.connected && !fullscreen ? .mint.opacity(0.25) : .clear, radius: 24)
         .overlay {
-            if !fullscreen { RoundedRectangle(cornerRadius: 24).stroke(.white.opacity(0.09), lineWidth: 1) }
+            if !fullscreen {
+                RoundedRectangle(cornerRadius: 24)
+                    .stroke(session.connected ? .mint.opacity(0.35) : .white.opacity(0.09), lineWidth: 1)
+            }
         }
     }
 
@@ -160,7 +164,9 @@ struct RemoteView: View {
                 Spacer()
                 metric("RESOLUÇÃO", session.resolution)
                 Spacer()
-                metric("REDE · RTT", session.roundTripMs > 0 ? "\(session.roundTripMs) ms" : "—")
+                metric("RTT", session.roundTripMs > 0 ? "\(session.roundTripMs) ms" : "—")
+                Spacer()
+                metric("DADOS", session.connected ? bitrateText : "—")
             }
             Text(session.status).font(.caption).foregroundStyle(session.connected ? Color.mint : Color.secondary)
                 .accessibilityIdentifier("sessionStatus")
@@ -195,6 +201,17 @@ struct RemoteView: View {
         }
     }
 
+    private var bitrateText: String {
+        let kbps = session.bitrateKbps
+        if kbps >= 1000 { return String(format: "%.1f Mb/s", kbps / 1000) }
+        return "\(Int(kbps)) Kb/s"
+    }
+    private var linkColor: Color {
+        guard session.connected else { return .gray }
+        if session.roundTripMs <= 0 || session.roundTripMs < 50 { return .mint }
+        if session.roundTripMs < 120 { return .orange }
+        return .red
+    }
     private func metric(_ title: String, _ value: String) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(title).font(.system(size: 8, weight: .bold)).tracking(1.6).foregroundStyle(.secondary)

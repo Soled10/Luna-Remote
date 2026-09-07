@@ -71,7 +71,7 @@ internal static class SelfTest
         var profile = new Program.AutoProfile();
         Check(profile.Tier == 0 && profile.Current(120) == (60, 960, 50), "Auto slow-starts light");
         for (int i = 0; i < 240; i++) profile.Observe(20);
-        Check(profile.Tier == 1 && profile.Current(120) == (120, 1280, 60), "Sustained good network upgrades");
+        Check(profile.Tier == 1 && profile.Current(120) == (120, 1280, 68), "Sustained good network upgrades");
         for (int i = 0; i < 9; i++) profile.Observe(500);
         Check(profile.Tier == 1, "Single spikes do not downgrade");
         profile.Observe(500);
@@ -82,5 +82,15 @@ internal static class SelfTest
         Check(hash1 == hash2, "Identical frames hash equal");
         tiny.SetPixel(3, 4, Color.Blue);
         Check(Program.ThumbHash(tiny) != hash1, "Changed pixel detected");
+        using var screen = new Bitmap(256, 144, PixelFormat.Format32bppArgb);
+        using (var sg = Graphics.FromImage(screen)) sg.Clear(Color.White);
+        using var same = (Bitmap)screen.Clone();
+        Check(Program.DirtyBox(screen, same) == null, "Identical frames have no dirty box");
+        using (var dg = Graphics.FromImage(same)) dg.FillRectangle(Brushes.Black, 10, 20, 30, 40);
+        var dirty = Program.DirtyBox(screen, same);
+        Check(dirty.HasValue, "Changed block detected");
+        Check(dirty!.Value.box.Contains(new Rectangle(10, 20, 30, 40)), "Dirty box covers the change");
+        Check(dirty!.Value.box.Width <= 128 && dirty!.Value.box.Height <= 128, "Dirty box stays tile-aligned");
+        Check(dirty!.Value.ratio < 0.45, "Small change stays well under full-frame cutoff");
     }
 }

@@ -33,7 +33,7 @@ internal static class Program
         catch (HttpListenerException e) { Console.Error.WriteLine($"Não foi possível abrir porta {port}: {e.Message}"); return; }
         // Coordenadas de captura e do cursor em pixels reais, mesmo com escala de 125%/150% no Windows.
         try { SetProcessDPIAware(); } catch { }
-        Console.WriteLine($"Luna Remote Agent 0.5.1 | {ListenPrefix(port)} | até {MaxFps()} fps | Ctrl+C para encerrar");
+        Console.WriteLine($"Luna Remote Agent 0.6.0 | {ListenPrefix(port)} | até {MaxFps()} fps | Ctrl+C para encerrar");
         while (true)
         {
             var context = await listener.GetContextAsync();
@@ -54,7 +54,8 @@ internal static class Program
             try
             {
                 var socket = (await context.AcceptWebSocketAsync(null)).WebSocket;
-                _ = RunSession(socket, context.Request.QueryString["protocol"] == "3");
+                var proto = context.Request.QueryString["protocol"];
+                _ = RunSession(socket, proto is "3" or "4", regions: proto == "4");
             }
             catch { SessionSlot.Release(); }
         }
@@ -79,7 +80,7 @@ internal static class Program
         return 120;
     }
 
-    private static async Task RunSession(WebSocket socket, bool flowControl)
+    private static async Task RunSession(WebSocket socket, bool flowControl, bool regions)
     {
         using (socket)
         using (var stop = new CancellationTokenSource())
@@ -98,9 +99,9 @@ internal static class Program
             Task frames = Task.CompletedTask, watchdog = Task.CompletedTask;
             try
             {
-                await Send(new { type = "hello", version = "0.5.1", protocol = 3, gamepad = pad.Available, gamepadStatus = pad.Status, maxFps = ceiling, cursor = true });
+                await Send(new { type = "hello", version = "0.6.0", protocol = 4, gamepad = pad.Available, gamepadStatus = pad.Status, maxFps = ceiling, cursor = true, regions });
                 Console.WriteLine("Cliente conectado. " + pad.Status);
-                frames = Task.Run(() => StreamScreen(socket, sendLock, stop, flowControl ? window : null, () => quality, ceiling));
+                frames = Task.Run(() => StreamScreen(socket, sendLock, stop, flowControl ? window : null, () => quality, ceiling, regions));
                 watchdog = Task.Run(async () =>
                 {
                     while (!stop.IsCancellationRequested)
@@ -191,12 +192,14 @@ internal static class Program
         finally { mutex.Release(); }
     }
 
-    private static async Task StreamScreen(WebSocket socket, SemaphoreSlim mutex, CancellationTokenSource stop, FrameWindow? window, Func<string> getQuality, int ceiling)
+    private static async Task StreamScreen(WebSocket socket, SemaphoreSlim mutex, CancellationTokenSource stop, FrameWindow? window, Func<string> getQuality, int ceiling, bool regions)
     {
         var codec = ImageCodecInfo.GetImageEncoders().First(c => c.FormatID == ImageFormat.Jpeg.Guid);
         using var encParams = new EncoderParameters(1);
         Bitmap? frame = null;   // bitmap final, já na resolução de envio (reutilizado)
         Graphics? gfx = null;
+        Bitmap? prev = null;    // último conteúdo ENVIADO (só no modo regiões)
+        Graphics? prevGfx = null;
         Bitmap? raw = null;     // só alocado se o StretchBlt falhar (fallback GDI)
         Graphics? rawGfx = null;
         Size frameSize = Size.Empty;
@@ -208,6 +211,8 @@ internal static class Program
         bool lastCurVis = false;
         long lastFrameSent = 0, lastCursorMeta = 0;
         bool pausedLogged = false, captureLogged = false, useFallback = false;
+        long statFrames = 0, statBytes = 0, statStart = System.Diagnostics.Stopwatch.GetTimestamp();
+        double statCap = 0, statEnc = 0, statSend = 0;
         try
         {
             while (!stop.IsCancellationRequested)
@@ -236,15 +241,24 @@ internal static class Program
                 int outH = Math.Max(180, (int)(bounds.Height * scale));
                 if (frame == null || frameSize != new Size(outW, outH) || bounds != lastBounds)
                 {
-                    gfx?.Dispose(); frame?.Dispose(); frame = null;
+                    gfx?.Dispose(); frame?.Dispose(); prevGfx?.Dispose(); prev?.Dispose();
+                    frame = null; prev = null;
                     frame = new Bitmap(outW, outH, PixelFormat.Format32bppArgb);
                     gfx = Graphics.FromImage(frame);
                     gfx.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.Bilinear;
+                    if (regions)
+                    {
+                        prev = new Bitmap(outW, outH, PixelFormat.Format32bppArgb);
+                        prevGfx = Graphics.FromImage(prev);
+                        prevGfx.CompositingMode = System.Drawing.Drawing2D.CompositingMode.SourceCopy;
+                        prevGfx.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.Bilinear;
+                    }
                     frameSize = new Size(outW, outH); lastBounds = bounds;
                     havePrev = false; // resize/monitor novo: reenvia cheio
                 }
 
                 // Captura direto na resolução final (1 chamada). Fallback GDI se falhar.
+                long capStart = System.Diagnostics.Stopwatch.GetTimestamp();
                 if (!useFallback && !CaptureStretch(frame, gfx!, bounds))
                 {
                     useFallback = true;
@@ -261,6 +275,7 @@ internal static class Program
                     rawGfx!.CopyFromScreen(bounds.Location, Point.Empty, bounds.Size);
                     gfx!.DrawImage(raw, 0, 0, outW, outH);
                 }
+                double capMs = System.Diagnostics.Stopwatch.GetElapsedTime(capStart).TotalMilliseconds;
 
                 // Tela parada? Não codifica nem envia JPEG: libera o slot e dorme.
                 // O cursor continua ao vivo por mensagem própria (aqui e no eco de input).
@@ -282,15 +297,62 @@ internal static class Program
                     continue;
                 }
 
-                DrawRealCursor(gfx!, outW, outH, scale, curX, curY, curVis);
+                // Diff exato por blocos: envia só o retângulo sujo (1 JPEG). Se mais de
+                // 45% sujou, compensa mais o quadro cheio. Clientes antigos: quadro cheio
+                // com cursor desenhado, como antes.
+                bool sendFull = !havePrev || stale;
+                Rectangle box = new(0, 0, outW, outH);
+                if (regions && havePrev && !stale && prev != null)
+                {
+                    var dirty = DirtyBox(frame, prev);
+                    if (dirty is { } d && d.ratio <= 0.45 && d.box.Width > 0 && d.box.Height > 0)
+                    { box = d.box; sendFull = false; }
+                }
+                long encStart = System.Diagnostics.Stopwatch.GetTimestamp();
+                byte[] jpeg;
+                if (!regions) DrawRealCursor(gfx!, outW, outH, scale, curX, curY, curVis);
                 encParams.Param[0]?.Dispose();
                 encParams.Param[0] = new EncoderParameter(System.Drawing.Imaging.Encoder.Quality, q);
-                byte[] jpeg;
-                using (var ms = new MemoryStream(131072)) { frame.Save(ms, codec, encParams); jpeg = ms.ToArray(); }
+                if (sendFull || !regions)
+                {
+                    using var ms = new MemoryStream(131072);
+                    frame.Save(ms, codec, encParams);
+                    jpeg = ms.ToArray();
+                }
+                else
+                {
+                    using var crop = frame.Clone(box, PixelFormat.Format32bppArgb);
+                    using var ms = new MemoryStream(Math.Max(8192, box.Width * box.Height / 4));
+                    crop.Save(ms, codec, encParams);
+                    jpeg = ms.ToArray();
+                }
+                double encMs = System.Diagnostics.Stopwatch.GetElapsedTime(encStart).TotalMilliseconds;
+                long sendStart = System.Diagnostics.Stopwatch.GetTimestamp();
+                if (regions)
+                {
+                    var region = new { type = "region", frame = id, x = box.X, y = box.Y, w = box.Width, h = box.Height, full = sendFull };
+                    await SendBytes(socket, mutex, JsonSerializer.SerializeToUtf8Bytes(region), WebSocketMessageType.Text, stop.Token);
+                }
                 await SendBytes(socket, mutex, window == null ? jpeg : FrameWindow.Packet(id, jpeg), WebSocketMessageType.Binary, stop.Token);
+                double sendMs = System.Diagnostics.Stopwatch.GetElapsedTime(sendStart).TotalMilliseconds;
+                if (regions)
+                {
+                    if (sendFull) { (prev, frame) = (frame, prev); (prevGfx, gfx) = (gfx, prevGfx); }
+                    else prevGfx!.DrawImage(frame, box, box.X, box.Y, box.Width, box.Height, GraphicsUnit.Pixel);
+                }
                 havePrev = true; prevHash = hash;
                 lastFrameSent = System.Diagnostics.Stopwatch.GetTimestamp();
                 now = lastFrameSent;
+                statFrames++; statBytes += jpeg.Length; statCap += capMs; statEnc += encMs; statSend += sendMs;
+                if (System.Diagnostics.Stopwatch.GetElapsedTime(statStart).TotalSeconds >= 5)
+                {
+                    double secs = System.Diagnostics.Stopwatch.GetElapsedTime(statStart).TotalSeconds;
+                    Console.WriteLine($"[vídeo] {statFrames / secs:F0} fps · {statBytes / 1024.0 / Math.Max(1, statFrames):F0} KB/f · " +
+                        $"cap {statCap / statFrames:F1}ms enc {statEnc / statFrames:F1}ms snd {statSend / statFrames:F1}ms · " +
+                        $"{mode}{(auto ? $" t{profile.Tier}" : "")} {outW}x{outH} q{q}");
+                    statFrames = 0; statBytes = 0; statCap = statEnc = statSend = 0;
+                    statStart = System.Diagnostics.Stopwatch.GetTimestamp();
+                }
                 if (cursorChanged || System.Diagnostics.Stopwatch.GetElapsedTime(lastCursorMeta).TotalMilliseconds > 200)
                 {
                     lastCurX = curX; lastCurY = curY; lastCurVis = curVis; lastCursorMeta = now;
@@ -314,7 +376,7 @@ internal static class Program
             }
         }
         catch (Exception) { stop.Cancel(); }
-        finally { gfx?.Dispose(); frame?.Dispose(); rawGfx?.Dispose(); raw?.Dispose(); }
+        finally { gfx?.Dispose(); frame?.Dispose(); prevGfx?.Dispose(); prev?.Dispose(); rawGfx?.Dispose(); raw?.Dispose(); }
     }
 
     private static (int fps, double width, long quality) Preset(string mode, int ceiling, bool constrained)
@@ -323,8 +385,8 @@ internal static class Program
         return mode switch
         {
             "performance" => (Math.Min(ceiling, 120), 960, 50),
-            "balanced" => (Math.Min(ceiling, 90), 1280, 60),
-            "quality" => (Math.Min(ceiling, 60), 1600, 72),
+            "balanced" => (Math.Min(ceiling, 90), 1280, 65),
+            "quality" => (Math.Min(ceiling, 60), 1600, 78),
             _ => (ceiling, 1280, 60),
         };
     }
@@ -350,7 +412,7 @@ internal static class Program
             }
         }
         public (int fps, double width, long quality) Current(int ceiling) =>
-            Tier == 0 ? (Math.Min(ceiling, 60), 960, 50) : (ceiling, 1280, 60);
+            Tier == 0 ? (Math.Min(ceiling, 60), 960, 50) : (ceiling, 1280, 68);
     }
 
     private static bool CursorMoved(double lx, double ly, bool lv, double x, double y, bool v) =>
@@ -464,6 +526,40 @@ internal static class Program
             return h;
         }
         finally { bmp.UnlockBits(data); }
+    }
+
+    // Compara dois quadros por blocos de 128px (exato, sem amostragem) e devolve
+    // a caixa que cobre todos os blocos sujos + a fração suja. Null = idênticos.
+    internal static (Rectangle box, double ratio)? DirtyBox(Bitmap cur, Bitmap prv)
+    {
+        if (cur.Size != prv.Size) return null;
+        const int T = 128;
+        int W = cur.Width, H = cur.Height;
+        int cols = (W + T - 1) / T, rows = (H + T - 1) / T;
+        var cd = cur.LockBits(new Rectangle(0, 0, W, H), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+        var pd = prv.LockBits(new Rectangle(0, 0, W, H), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+        try
+        {
+            int minX = cols, minY = rows, maxX = -1, maxY = -1, dirty = 0;
+            byte[] a = new byte[T * 4], b = new byte[T * 4];
+            for (int ty = 0; ty < rows; ty++)
+                for (int tx = 0; tx < cols; tx++)
+                {
+                    int x0 = tx * T, y0 = ty * T, tw = Math.Min(T, W - x0), th = Math.Min(T, H - y0);
+                    bool diff = false;
+                    for (int y = 0; y < th && !diff; y++)
+                    {
+                        Marshal.Copy(IntPtr.Add(cd.Scan0, (y0 + y) * cd.Stride + x0 * 4), a, 0, tw * 4);
+                        Marshal.Copy(IntPtr.Add(pd.Scan0, (y0 + y) * pd.Stride + x0 * 4), b, 0, tw * 4);
+                        if (!a.AsSpan(0, tw * 4).SequenceEqual(b.AsSpan(0, tw * 4))) diff = true;
+                    }
+                    if (diff) { dirty++; if (tx < minX) minX = tx; if (tx > maxX) maxX = tx; if (ty < minY) minY = ty; if (ty > maxY) maxY = ty; }
+                }
+            if (dirty == 0) return null;
+            var box = Rectangle.FromLTRB(minX * T, minY * T, Math.Min(W, (maxX + 1) * T), Math.Min(H, (maxY + 1) * T));
+            return (box, (double)dirty / (cols * rows));
+        }
+        finally { cur.UnlockBits(cd); prv.UnlockBits(pd); }
     }
 
     [DllImport("user32.dll")] private static extern bool SetProcessDPIAware();

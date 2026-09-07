@@ -22,7 +22,7 @@ enum RemoteEndpoint {
         if c.scheme == "ws", c.port == nil { c.port = 8765 }
         c.path = "/remote/"
         c.fragment = nil
-        c.queryItems = [URLQueryItem(name: "token", value: token), URLQueryItem(name: "protocol", value: "3")]
+        c.queryItems = [URLQueryItem(name: "token", value: token), URLQueryItem(name: "protocol", value: "4")]
         guard let url = c.url else { throw EndpointError.invalid }
         return url
     }

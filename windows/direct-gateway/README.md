@@ -19,7 +19,7 @@ O script valida o Caddyfile, cria o serviço `LunaRemoteGateway`, permite soment
 
 ## Limite atual
 
-O gateway fornece TLS válido e remove o percurso do Quick Tunnel, mas vídeo ainda é JPEG/WebSocket sobre TCP. Para um modo de jogo comparável a Parsec, o próximo projeto será Desktop Duplication + H.264 por hardware + WebRTC/UDP. Não abra UDP aleatoriamente até esse transporte existir.
+O gateway fornece TLS válido e remove o percurso do Quick Tunnel, mas vídeo ainda é JPEG diferencial/WebSocket sobre TCP. Para um modo de jogo comparável a Parsec, o próximo projeto será Desktop Duplication + H.264 por hardware + WebRTC/UDP. Não abra UDP aleatoriamente até esse transporte existir.
 
 - [Caddy: HTTPS automático](https://caddyserver.com/docs/automatic-https)
 - [Caddy: reverse proxy](https://caddyserver.com/docs/caddyfile/directives/reverse_proxy)

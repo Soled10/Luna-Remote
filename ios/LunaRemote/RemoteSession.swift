@@ -12,6 +12,7 @@ final class RemoteSession: ObservableObject {
     @Published var protocolVersion = 0
     @Published var fps = 0
     @Published var resolution = "—"
+    @Published var bitrateKbps = 0.0
     @Published var acknowledgedText = ""
     @Published var inputError = ""
     @Published var roundTripMs = 0
@@ -30,10 +31,13 @@ final class RemoteSession: ObservableObject {
     private var pendingPing: (id: String, started: TimeInterval)?
     private var queue: [(data: Data, key: String?)] = []
     private var counter = 0
+    private var statBytes = 0
     private var measuredAt = Date()
     private var lastShownSequence = 0
     private var generation = UUID()
     private var bgTask = UIBackgroundTaskIdentifier.invalid
+    private let compositor = FrameCompositor()
+    private let haptics = UINotificationFeedbackGenerator()
 
     func connect(host: String, token: String) {
         wantsConnection = true
@@ -99,34 +103,41 @@ final class RemoteSession: ObservableObject {
 
     // O ack sai assim que o pacote chega (mede a rede, não o decode), e o decode
     // roda em paralelo: quadros lentos nunca seguram a chegada do próximo.
+    // Servidores v4 mandam só o retângulo sujo ("region"); o compositor cola no
+    // quadro retido em vez de trocar a imagem inteira.
     private func receivedFrame(_ data: Data, id: UUID) {
         let packet = VideoPacket(data)
         // Ack direto na fila (sem exigir `connected`): o 1º quadro também libera
         // crédito no servidor, senão a janela de fluxo encolheria para sempre.
         if let sequence = packet.sequence { enqueue(RemoteCommand(type: "frameAck", x: sequence)) }
+        statBytes += data.count
         let jpeg = packet.jpeg
+        let region = compositor.takePending()
         Task.detached(priority: .userInitiated) { [weak self] in
             guard let encoded = UIImage(data: jpeg),
-                  let image = await encoded.byPreparingForDisplay() else { return }
+                  let tile = await encoded.byPreparingForDisplay() else { return }
             await MainActor.run { [weak self] in
                 guard let self, self.generation == id else { return }
                 if let sequence = packet.sequence {
                     guard sequence >= self.lastShownSequence else { return } // descarta decode velho
                     self.lastShownSequence = sequence
                 }
-                self.frames.image = image
+                guard let composed = self.compositor.draw(tile: tile, region: region, sequence: packet.sequence) else { return }
+                self.frames.image = composed
                 if !self.connected {
                     self.connected = true; self.connecting = false
                     self.status = "Sessão ativa"
                     self.reconnectDelay = 1.0
                     UIApplication.shared.isIdleTimerDisabled = true
+                    self.haptics.notificationOccurred(.success)
                 }
                 self.counter += 1
                 let elapsed = Date().timeIntervalSince(self.measuredAt)
                 if elapsed >= 1 {
                     self.fps = Int((Double(self.counter) / elapsed).rounded())
-                    self.resolution = "\(Int(image.size.width)) × \(Int(image.size.height))"
-                    self.counter = 0; self.measuredAt = Date()
+                    self.resolution = "\(Int(composed.size.width)) × \(Int(composed.size.height))"
+                    self.bitrateKbps = Double(self.statBytes * 8) / 1000.0 / elapsed
+                    self.counter = 0; self.statBytes = 0; self.measuredAt = Date()
                 }
             }
         }
@@ -150,6 +161,11 @@ final class RemoteSession: ObservableObject {
             frames.cursorX = reply.x ?? frames.cursorX
             frames.cursorY = reply.y ?? frames.cursorY
             frames.cursorVisible = reply.visible ?? true
+        case "region":
+            compositor.pending = FrameCompositor.Region(
+                x: reply.x ?? 0, y: reply.y ?? 0,
+                w: reply.w ?? 0, h: reply.h ?? 0,
+                full: reply.full ?? true, frame: reply.frame)
         case "error": inputError = reply.message ?? "O Windows recusou o comando."
         default: break
         }
@@ -213,8 +229,10 @@ final class RemoteSession: ObservableObject {
 
     private func handleDrop(_ message: String) {
         let retry = wantsConnection
+        let hadSession = connected
         tearDown()
         status = message
+        if hadSession { haptics.notificationOccurred(.error) }
         if retry { scheduleReconnect() }
     }
 
@@ -278,7 +296,9 @@ final class RemoteSession: ObservableObject {
         session?.invalidateAndCancel(); session = nil
         connected = false; connecting = false; gamepadReady = false
         protocolVersion = 0; frames.image = nil; frames.cursorVisible = false
-        fps = 0; resolution = "—"; lastShownSequence = 0
+        fps = 0; resolution = "—"; bitrateKbps = 0; lastShownSequence = 0
+        statBytes = 0
+        compositor.reset()
         gamepadStatus = "Conecte ao PC para verificar"
         UIApplication.shared.isIdleTimerDisabled = false
     }
@@ -302,7 +322,82 @@ final class RemoteSession: ObservableObject {
         let message: String?
         let x: Double?
         let y: Double?
+        let w: Double?
+        let h: Double?
+        let full: Bool?
+        let frame: Int?
         let visible: Bool?
+    }
+}
+
+/// Cola retângulos sujos no quadro retido (protocolo v4). O contexto é espelhado
+/// uma vez na criação, então tudo usa coordenadas top-left como o JPEG.
+@MainActor
+final class FrameCompositor {
+    struct Region {
+        let x, y, w, h: Double
+        let full: Bool
+        let frame: Int?
+    }
+    var pending: Region?
+    private var ctx: CGContext?
+    private var size = CGSize.zero
+
+    func takePending() -> Region? {
+        let r = pending
+        pending = nil
+        return r
+    }
+
+    func reset() {
+        pending = nil
+        ctx = nil
+        size = .zero
+    }
+
+    private func makeContext(w: Int, h: Int) -> CGContext? {
+        guard w > 0, h > 0,
+              let ctx = CGContext(data: nil, width: w, height: h,
+                                  bitsPerComponent: 8, bytesPerRow: 0,
+                                  space: CGColorSpaceCreateDeviceRGB(),
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        ctx.interpolationQuality = .none
+        ctx.translateBy(x: 0, y: CGFloat(h))
+        ctx.scaleBy(x: 1, y: -1)
+        return ctx
+    }
+
+    /// Compõe o tile decodificado. Region nil = JPEG cheio (servidor antigo).
+    func draw(tile: UIImage, region: Region?, sequence: Int?) -> UIImage? {
+        guard let cg = tile.cgImage else { return nil }
+        if let r = region, !r.full, ctx != nil,
+           r.frame == nil || r.frame == sequence {
+            let rect = CGRect(x: Int(r.x), y: Int(r.y), width: cg.width, height: cg.height)
+            // Fora do buffer = dessincronia: reseta com o tile como quadro cheio.
+            guard rect.minX >= 0, rect.minY >= 0,
+                  rect.maxX <= size.width + 1, rect.maxY <= size.height + 1 else {
+                return reset(with: cg)
+            }
+            ctx!.draw(cg, in: rect)
+        } else {
+            let w = (region?.full == true && region!.w > 0) ? Int(region!.w) : cg.width
+            let h = (region?.full == true && region!.h > 0) ? Int(region!.h) : cg.height
+            guard let fresh = makeContext(w: w, h: h) else { return nil }
+            ctx = fresh
+            size = CGSize(width: w, height: h)
+            fresh.draw(cg, in: CGRect(x: 0, y: 0, width: cg.width, height: cg.height))
+        }
+        guard let outImage = ctx!.makeImage() else { return nil }
+        return UIImage(cgImage: outImage, scale: 1, orientation: .up)
+    }
+
+    private func reset(with cg: CGImage) -> UIImage? {
+        guard let fresh = makeContext(w: cg.width, h: cg.height) else { return nil }
+        ctx = fresh
+        size = CGSize(width: cg.width, height: cg.height)
+        fresh.draw(cg, in: CGRect(x: 0, y: 0, width: cg.width, height: cg.height))
+        guard let outImage = fresh.makeImage() else { return nil }
+        return UIImage(cgImage: outImage, scale: 1, orientation: .up)
     }
 }
 

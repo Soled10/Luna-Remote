@@ -29,7 +29,7 @@ jobs:
             -sdk iphonesimulator \
             -configuration Debug \
             -derivedDataPath build/DerivedData \
-          CODE_SIGNING_ALLOWED=NO build
+          CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- build
       - name: Install and launch in simulator
         run: |
           DEVICE=$(xcrun simctl create LunaSmoke com.apple.CoreSimulator.SimDeviceType.iPhone-16)
@@ -41,7 +41,7 @@ jobs:
           xcrun simctl io "$DEVICE" screenshot build/LunaRemote-launch.png
           xcodebuild test -project ios/LunaRemote.xcodeproj \
             -scheme LunaRemote -destination "platform=iOS Simulator,id=$DEVICE" \
-            -derivedDataPath build/DerivedData -resultBundlePath build/Tests.xcresult CODE_SIGNING_ALLOWED=NO
+            -derivedDataPath build/DerivedData -resultBundlePath build/Tests.xcresult CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=-
       - name: Export test screenshots
         if: always()
         run: |
